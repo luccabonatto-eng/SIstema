@@ -1,0 +1,253 @@
+// API Client para Opticom ERP
+// Gerencia autenticação e requisições HTTP
+
+const API_BASE_URL = window.location.origin.includes('localhost')
+  ? 'http://localhost:3001/api'
+  : 'https://opticom-backend-production.up.railway.app/api';
+
+class OpticomAPI {
+  constructor() {
+    this.user = null;
+    this.token = sessionStorage.getItem('opticom_token') || null;
+  }
+
+  // === Autenticação ===
+  async login(email, password) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Erro ao fazer login');
+
+      // Salvar token em sessionStorage
+      this.token = data.token;
+      this.user = data.user;
+      sessionStorage.setItem('opticom_token', data.token);
+
+      return { success: true, user: data.user };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  async register(name, email, password, role = 'TECHNICIAN') {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password, role })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Erro ao registrar');
+
+      return { success: true, user: data.user };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  logout() {
+    this.user = null;
+    this.token = null;
+    sessionStorage.removeItem('opticom_token');
+  }
+
+  isAuthenticated() {
+    return !!this.user;
+  }
+
+  // === Requisições Autenticadas ===
+  async _fetch(endpoint, options = {}) {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...options.headers
+    };
+
+    // Adicionar token no Authorization header
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        ...options,
+        headers
+      });
+
+      if (response.status === 401) {
+        this.logout();
+        window.location.href = '/';
+      }
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Erro na requisição');
+
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  // === Clientes ===
+  async getCustomers() {
+    return this._fetch('/customers');
+  }
+
+  async getCustomer(id) {
+    return this._fetch(`/customers/${id}`);
+  }
+
+  async createCustomer(customer) {
+    return this._fetch('/customers', { method: 'POST', body: JSON.stringify(customer) });
+  }
+
+  async updateCustomer(id, customer) {
+    return this._fetch(`/customers/${id}`, { method: 'PUT', body: JSON.stringify(customer) });
+  }
+
+  async deleteCustomer(id) {
+    return this._fetch(`/customers/${id}`, { method: 'DELETE' });
+  }
+
+  // === Contratos ===
+  async getContracts() {
+    return this._fetch('/contracts');
+  }
+
+  async getContract(id) {
+    return this._fetch(`/contracts/${id}`);
+  }
+
+  async createContract(contract) {
+    return this._fetch('/contracts', { method: 'POST', body: JSON.stringify(contract) });
+  }
+
+  async updateContract(id, contract) {
+    return this._fetch(`/contracts/${id}`, { method: 'PUT', body: JSON.stringify(contract) });
+  }
+
+  async deleteContract(id) {
+    return this._fetch(`/contracts/${id}`, { method: 'DELETE' });
+  }
+
+  // === Ordens de Serviço ===
+  async getOrders(filters = {}) {
+    const params = new URLSearchParams(filters);
+    return this._fetch(`/orders?${params}`);
+  }
+
+  async getOrder(id) {
+    return this._fetch(`/orders/${id}`);
+  }
+
+  async createOrder(order) {
+    return this._fetch('/orders', { method: 'POST', body: JSON.stringify(order) });
+  }
+
+  async updateOrder(id, order) {
+    return this._fetch(`/orders/${id}`, { method: 'PUT', body: JSON.stringify(order) });
+  }
+
+  async deleteOrder(id) {
+    return this._fetch(`/orders/${id}`, { method: 'DELETE' });
+  }
+
+  // === Técnicos ===
+  async getTechnicians() {
+    return this._fetch('/technicians');
+  }
+
+  async getTechnician(id) {
+    return this._fetch(`/technicians/${id}`);
+  }
+
+  async createTechnician(technician) {
+    return this._fetch('/technicians', { method: 'POST', body: JSON.stringify(technician) });
+  }
+
+  async updateTechnician(id, technician) {
+    return this._fetch(`/technicians/${id}`, { method: 'PUT', body: JSON.stringify(technician) });
+  }
+
+  async deleteTechnician(id) {
+    return this._fetch(`/technicians/${id}`, { method: 'DELETE' });
+  }
+
+  // === Veículos ===
+  async getVehicles() {
+    return this._fetch('/vehicles');
+  }
+
+  async getVehicle(id) {
+    return this._fetch(`/vehicles/${id}`);
+  }
+
+  async createVehicle(vehicle) {
+    return this._fetch('/vehicles', { method: 'POST', body: JSON.stringify(vehicle) });
+  }
+
+  async updateVehicle(id, vehicle) {
+    return this._fetch(`/vehicles/${id}`, { method: 'PUT', body: JSON.stringify(vehicle) });
+  }
+
+  async deleteVehicle(id) {
+    return this._fetch(`/vehicles/${id}`, { method: 'DELETE' });
+  }
+
+  // === Produtos ===
+  async getProducts() {
+    return this._fetch('/products');
+  }
+
+  async getProduct(id) {
+    return this._fetch(`/products/${id}`);
+  }
+
+  async createProduct(product) {
+    return this._fetch('/products', { method: 'POST', body: JSON.stringify(product) });
+  }
+
+  async updateProduct(id, product) {
+    return this._fetch(`/products/${id}`, { method: 'PUT', body: JSON.stringify(product) });
+  }
+
+  async deleteProduct(id) {
+    return this._fetch(`/products/${id}`, { method: 'DELETE' });
+  }
+
+  // === Transações ===
+  async getTransactions(filters = {}) {
+    const params = new URLSearchParams(filters);
+    return this._fetch(`/transactions?${params}`);
+  }
+
+  async getTransaction(id) {
+    return this._fetch(`/transactions/${id}`);
+  }
+
+  async createTransaction(transaction) {
+    return this._fetch('/transactions', { method: 'POST', body: JSON.stringify(transaction) });
+  }
+
+  async updateTransaction(id, transaction) {
+    return this._fetch(`/transactions/${id}`, { method: 'PUT', body: JSON.stringify(transaction) });
+  }
+
+  async deleteTransaction(id) {
+    return this._fetch(`/transactions/${id}`, { method: 'DELETE' });
+  }
+
+  // === Auditoria ===
+  async getAuditLogs(filters = {}) {
+    const params = new URLSearchParams(filters);
+    return this._fetch(`/audit?${params}`);
+  }
+}
+
+// Instância global
+const api = new OpticomAPI();
