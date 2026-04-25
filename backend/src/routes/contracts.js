@@ -39,6 +39,9 @@ router.get('/:id', async (req, res) => {
       .eq('id', id)
       .single();
 
+    if (error && error.code === 'PGRST116') {
+      return res.status(404).json({ error: 'Contrato não encontrado' });
+    }
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Contrato não encontrado' });
 
@@ -140,6 +143,16 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', checkRole('ADMIN', 'MANAGER'), async (req, res) => {
   try {
     const { id } = req.params;
+
+    const { data: existing } = await supabase
+      .from('contracts')
+      .select('id')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Contrato não encontrado' });
+    }
 
     const { error } = await supabase
       .from('contracts')

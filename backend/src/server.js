@@ -94,8 +94,12 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Opticom API rodando em http://localhost:${PORT}`);
-  console.log(`📊 Dashboard em http://localhost:3000`);
-  console.log(`✅ Database conectado`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Opticom API rodando em http://localhost:${PORT}`);
+    console.log(`📊 Dashboard em http://localhost:3000`);
+    console.log(`✅ Database conectado`);
+  });
+}
+
+module.exports = app;

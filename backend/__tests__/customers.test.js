@@ -115,8 +115,8 @@ describe('Customers API', () => {
         .get('/api/customers')
         .set('Authorization', `Bearer ${validToken}`);
 
-      if (res.body.length > 0) {
-        customerId = res.body[0].id;
+      if (res.body.data && res.body.data.length > 0) {
+        customerId = res.body.data[0].id;
       }
     });
 
@@ -148,8 +148,8 @@ describe('Customers API', () => {
         .get('/api/customers')
         .set('Authorization', `Bearer ${validToken}`);
 
-      if (res.body.length > 0) {
-        customerId = res.body[0].id;
+      if (res.body.data && res.body.data.length > 0) {
+        customerId = res.body.data[0].id;
       }
     });
 

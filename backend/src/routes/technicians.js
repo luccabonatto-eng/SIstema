@@ -33,6 +33,9 @@ router.get('/:id', async (req, res) => {
       .eq('id', req.params.id)
       .single();
 
+    if (error && error.code === 'PGRST116') {
+      return res.status(404).json({ error: 'Técnico não encontrado' });
+    }
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Técnico não encontrado' });
     res.json(data);
@@ -63,7 +66,7 @@ router.put('/:id', async (req, res) => {
   try {
     // Whitelist explícito - apenas estes campos podem ser atualizados
     const allowedFields = {};
-    const fieldMap = ['name', 'phone', 'email', 'specializations', 'status'];
+    const fieldMap = ['name', 'phone', 'email', 'specializations', 'status', 'avg_time', 'rework_percentage'];
 
     fieldMap.forEach(field => {
       if (req.body.hasOwnProperty(field)) {
@@ -87,6 +90,16 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', checkRole('ADMIN', 'MANAGER'), async (req, res) => {
   try {
+    const { data: existing } = await supabase
+      .from('technicians')
+      .select('id')
+      .eq('id', req.params.id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Técnico não encontrado' });
+    }
+
     const { error } = await supabase
       .from('technicians')
       .delete()

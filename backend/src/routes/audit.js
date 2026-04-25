@@ -33,6 +33,9 @@ router.get('/:id', checkRole('ADMIN'), async (req, res) => {
       .eq('id', req.params.id)
       .single();
 
+    if (error && error.code === 'PGRST116') {
+      return res.status(404).json({ error: 'Log não encontrado' });
+    }
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Log não encontrado' });
     res.json(data);
@@ -41,8 +44,8 @@ router.get('/:id', checkRole('ADMIN'), async (req, res) => {
   }
 });
 
-// Create audit log (chamado internamente)
-router.post('/', async (req, res) => {
+// Create audit log - RBAC: apenas ADMIN
+router.post('/', checkRole('ADMIN'), async (req, res) => {
   try {
     const { user_id, module, action, detail, ip_address } = req.body;
 

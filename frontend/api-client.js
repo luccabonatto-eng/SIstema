@@ -58,7 +58,7 @@ class OpticomAPI {
   }
 
   isAuthenticated() {
-    return !!this.user;
+    return !!this.token;
   }
 
   // === Requisições Autenticadas ===

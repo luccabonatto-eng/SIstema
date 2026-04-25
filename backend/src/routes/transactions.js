@@ -38,6 +38,9 @@ router.get('/:id', async (req, res) => {
       .eq('id', req.params.id)
       .single();
 
+    if (error && error.code === 'PGRST116') {
+      return res.status(404).json({ error: 'Transação não encontrada' });
+    }
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Transação não encontrada' });
     res.json(data);
@@ -79,7 +82,7 @@ router.put('/:id', async (req, res) => {
   try {
     // Whitelist explícito - apenas estes campos podem ser atualizados
     const allowedFields = {};
-    const fieldMap = ['type', 'status', 'description', 'amount', 'due_date', 'category_id', 'bank_account_id', 'payment_method_id'];
+    const fieldMap = ['type', 'status', 'description', 'amount', 'due_date', 'paid_date', 'category_id', 'bank_account_id', 'payment_method_id', 'related_order_id', 'related_contract_id'];
 
     fieldMap.forEach(field => {
       if (req.body.hasOwnProperty(field)) {
@@ -103,6 +106,16 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', checkRole('ADMIN', 'MANAGER'), async (req, res) => {
   try {
+    const { data: existing } = await supabase
+      .from('transactions')
+      .select('id')
+      .eq('id', req.params.id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Transação não encontrada' });
+    }
+
     const { error } = await supabase
       .from('transactions')
       .delete()

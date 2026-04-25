@@ -98,24 +98,24 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { type, name, doc, city, phone, email, revenue, active } = req.body;
+
+    const updateData = {};
+    const fieldMap = ['type', 'name', 'doc', 'city', 'phone', 'email', 'revenue', 'active'];
+    fieldMap.forEach(field => {
+      if (req.body.hasOwnProperty(field)) {
+        updateData[field] = req.body[field];
+      }
+    });
 
     // Validação robusta
-    if (revenue !== undefined && revenue !== null && revenue < 0) {
+    if (updateData.revenue !== undefined && updateData.revenue !== null && updateData.revenue < 0) {
       return res.status(400).json({ error: 'Revenue não pode ser negativo' });
     }
 
     const { data, error } = await supabase
       .from('customers')
       .update({
-        type,
-        name,
-        doc,
-        city,
-        phone,
-        email,
-        revenue,
-        active,
+        ...updateData,
         updated_at: new Date().toISOString()
       })
       .eq('id', id)

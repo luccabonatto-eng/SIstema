@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const validator = require('validator');
 const supabase = require('../../config/supabase');
 
 const router = express.Router();
@@ -12,6 +13,10 @@ router.post('/register', async (req, res) => {
 
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Nome, email e senha são obrigatórios' });
+    }
+
+    if (!validator.isEmail(email)) {
+      return res.status(400).json({ error: 'Email inválido' });
     }
 
     if (role && !['ADMIN', 'MANAGER', 'TECHNICIAN'].includes(role)) {

@@ -33,6 +33,9 @@ router.get('/:id', async (req, res) => {
       .eq('id', req.params.id)
       .single();
 
+    if (error && error.code === 'PGRST116') {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Produto não encontrado' });
     res.json(data);
@@ -113,6 +116,16 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', checkRole('ADMIN', 'MANAGER'), async (req, res) => {
   try {
+    const { data: existing } = await supabase
+      .from('products')
+      .select('id')
+      .eq('id', req.params.id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
+
     const { error } = await supabase
       .from('products')
       .delete()
