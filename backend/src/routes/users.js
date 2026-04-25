@@ -41,18 +41,24 @@ router.put('/:id', checkRole('ADMIN'), async (req, res) => {
   }
 });
 
-// DELETE (deactivate) user — ADMIN only
+// DELETE permanently — ADMIN only (hard delete)
 router.delete('/:id', checkRole('ADMIN'), async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { data: existing } = await supabase
       .from('users')
-      .update({ status: 'INACTIVE', updated_at: new Date().toISOString() })
+      .select('id')
       .eq('id', req.params.id)
-      .select('id');
+      .single();
+
+    if (!existing) return res.status(404).json({ error: 'Usuário não encontrado' });
+
+    const { error } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', req.params.id);
 
     if (error) throw error;
-    if (!data?.length) return res.status(404).json({ error: 'Usuário não encontrado' });
-    res.json({ message: 'Usuário desativado' });
+    res.json({ message: 'Usuário excluído permanentemente' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

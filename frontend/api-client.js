@@ -267,6 +267,10 @@ class OpticomAPI {
   }
 
   async deactivateUser(id) {
+    return this._fetch(`/users/${id}`, { method: 'PUT', body: JSON.stringify({ status: 'INACTIVE' }) });
+  }
+
+  async deleteUser(id) {
     return this._fetch(`/users/${id}`, { method: 'DELETE' });
   }
 

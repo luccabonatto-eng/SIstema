@@ -3557,6 +3557,18 @@ const TechniciansPage = () => {
     }
   };
 
+  const deleteTech = async id => {
+    if (!window.confirm('Excluir este técnico permanentemente?')) return;
+    const result = await api.deleteTechnician(id);
+    if (result.success) {
+      setTechnicians(p=>p.filter(x=>x.id!==id));
+      setSelected(null);
+      setToast('Técnico excluído.');
+    } else {
+      setToast(`Erro: ${result.error}`);
+    }
+  };
+
   const sel = selected ? technicians.find(t=>t.id===selected.id)||selected : null;
 
   return (
@@ -3568,6 +3580,16 @@ const TechniciansPage = () => {
         </div>
         <button onClick={()=>setNewModal(true)} className="flex items-center gap-1.5 bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700"><Icon name="plus" className="w-4 h-4"/> Novo Técnico</button>
       </div>
+      {technicians.length===0&&(
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-12 text-center">
+          <div className="w-14 h-14 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Icon name="technicians" className="w-7 h-7 text-blue-400"/>
+          </div>
+          <p className="text-gray-600 font-medium mb-1">Nenhum técnico cadastrado</p>
+          <p className="text-sm text-gray-400 mb-5">Clique em "Novo Técnico" para adicionar o primeiro.</p>
+          <button onClick={()=>setNewModal(true)} className="inline-flex items-center gap-1.5 bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700"><Icon name="plus" className="w-4 h-4"/> Novo Técnico</button>
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {technicians.map(t=>(
           <div key={t.id} onClick={()=>setSelected(t)} className={`bg-white rounded-xl border border-gray-200 shadow-sm p-5 cursor-pointer hover:shadow-md transition-shadow ${t.status!=='ACTIVE'?'opacity-70':''}`}>
@@ -3622,6 +3644,7 @@ const TechniciansPage = () => {
               <button onClick={()=>toggleStatus(sel.id)} className={`flex-1 py-2.5 border rounded-lg text-sm font-medium ${sel.status==='ACTIVE'?'border-amber-300 text-amber-700 hover:bg-amber-50':'border-green-300 text-green-700 hover:bg-green-50'}`}>
                 {sel.status==='ACTIVE'?'Registrar Afastamento':'Retornar ao Trabalho'}
               </button>
+              <button onClick={()=>deleteTech(sel.id)} className="px-4 py-2.5 border border-red-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50">Excluir</button>
               <button onClick={()=>setSelected(null)} className="px-4 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Fechar</button>
             </div>
           </div>
@@ -3925,10 +3948,18 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
     }
   };
 
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, name }
+
   const deactivateUser = async id => {
     const result = await api.deactivateUser(id);
     if (result.success) { setUsers(p => p.map(u => u.id===id ? {...u, status:'INACTIVE'} : u)); setToast('Usuário desativado.'); }
     else setToast(result.error || 'Erro ao desativar usuário');
+  };
+
+  const deleteUserPermanent = async id => {
+    const result = await api.deleteUser(id);
+    if (result.success) { setUsers(p => p.filter(u => u.id!==id)); setDeleteConfirm(null); setToast('Usuário excluído permanentemente.'); }
+    else { setDeleteConfirm(null); setToast(result.error || 'Erro ao excluir usuário'); }
   };
 
   const ROLE_LABEL = { ADMIN:'Administrador', MANAGER:'Gerente', TECHNICIAN:'Técnico' };
@@ -4210,13 +4241,32 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
                     <td className="px-4 py-3 text-xs text-gray-500">{u.last_login ? new Date(u.last_login).toLocaleDateString('pt-BR') : u.lastLogin || '—'}</td>
                     <td className="px-4 py-3"><Badge status={u.status}/></td>
                     <td className="px-4 py-3">
-                      {u.status==='ACTIVE'&&<button onClick={()=>deactivateUser(u.id)} className="text-xs text-red-500 hover:underline">Desativar</button>}
+                      <div className="flex items-center gap-3">
+                        {u.status==='ACTIVE'&&u.id!==api.user?.id&&<button onClick={()=>deactivateUser(u.id)} className="text-xs text-amber-600 hover:underline">Desativar</button>}
+                        {u.id!==api.user?.id&&<button onClick={()=>setDeleteConfirm({id:u.id,name:u.name})} className="text-xs text-red-500 hover:underline">Excluir</button>}
+                        {u.id===api.user?.id&&<span className="text-xs text-gray-300">você</span>}
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          <Modal open={!!deleteConfirm} onClose={()=>setDeleteConfirm(null)} title="Excluir Usuário" size="sm">
+            {deleteConfirm&&(
+              <div className="space-y-4">
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <p className="text-sm font-medium text-red-800">Esta ação é irreversível.</p>
+                  <p className="text-sm text-red-700 mt-1">O usuário <strong>{deleteConfirm.name}</strong> será excluído permanentemente do sistema, incluindo seu histórico de acesso.</p>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button onClick={()=>setDeleteConfirm(null)} className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
+                  <button onClick={()=>deleteUserPermanent(deleteConfirm.id)} className="flex-1 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">Confirmar Exclusão</button>
+                </div>
+              </div>
+            )}
+          </Modal>
+
           <Modal open={inviteModal} onClose={()=>setInviteModal(false)} title="Convidar Usuário" size="sm">
             <div className="space-y-4">
               {[{label:'Nome',key:'name',placeholder:'Nome completo',type:'text'},{label:'E-mail',key:'email',placeholder:'email@empresa.com.br',type:'email'},{label:'Senha inicial',key:'password',placeholder:'Mínimo 6 caracteres',type:'password'}].map(f=>(
