@@ -15,6 +15,9 @@ const vehiclesRoutes = require('./routes/vehicles');
 const productsRoutes = require('./routes/products');
 const transactionsRoutes = require('./routes/transactions');
 const auditRoutes = require('./routes/audit');
+const categoriesRoutes = require('./routes/categories');
+const bankAccountsRoutes = require('./routes/bank-accounts');
+const paymentMethodsRoutes = require('./routes/payment-methods');
 
 const authMiddleware = require('./middleware/auth');
 
@@ -80,6 +83,9 @@ app.use('/api/vehicles', authMiddleware, vehiclesRoutes);
 app.use('/api/products', authMiddleware, productsRoutes);
 app.use('/api/transactions', authMiddleware, transactionsRoutes);
 app.use('/api/audit', authMiddleware, auditRoutes);
+app.use('/api/categories', authMiddleware, categoriesRoutes);
+app.use('/api/bank-accounts', authMiddleware, bankAccountsRoutes);
+app.use('/api/payment-methods', authMiddleware, paymentMethodsRoutes);
 
 // Error handling
 app.use((err, req, res, next) => {

@@ -55,10 +55,18 @@ router.get('/:id', async (req, res) => {
 // CREATE contract
 router.post('/', async (req, res) => {
   try {
-    const { number, customer_id, type, value, start_date, end_date, status, sla_hours } = req.body;
+    const { customer_id, type, value, start_date, end_date, status, sla_hours } = req.body;
+    let { number } = req.body;
 
-    if (!number || !customer_id || !type || !value) {
-      return res.status(400).json({ error: 'Campos obrigatórios faltando' });
+    if (!customer_id || !type || !value) {
+      return res.status(400).json({ error: 'customer_id, type e value são obrigatórios' });
+    }
+
+    // Auto-gerar número se não fornecido
+    if (!number) {
+      const { count } = await supabase.from('contracts').select('*', { count: 'exact', head: true });
+      const seq = String((count || 0) + 1).padStart(3, '0');
+      number = `CTR-${new Date().getFullYear()}-${seq}`;
     }
 
     // Validação robusta
@@ -72,19 +80,8 @@ router.post('/', async (req, res) => {
 
     const { data, error } = await supabase
       .from('contracts')
-      .insert([
-        {
-          number,
-          customer_id,
-          type,
-          value,
-          start_date,
-          end_date,
-          status: status || 'ACTIVE',
-          sla_hours
-        }
-      ])
-      .select();
+      .insert([{ number, customer_id, type, value, start_date, end_date, status: status || 'ACTIVE', sla_hours }])
+      .select('*, customers(*)');
 
     if (error) throw error;
 

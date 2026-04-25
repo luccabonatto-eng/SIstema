@@ -58,29 +58,35 @@ router.get('/:id', async (req, res) => {
 // CREATE order
 router.post('/', async (req, res) => {
   try {
-    const { number, customer_id, type, priority, status, assigned_technician_id, scheduled_date, substation, city, description } = req.body;
+    const { customer_id, type, priority, status, assigned_technician_id, scheduled_date, substation, city, description } = req.body;
+    let { number } = req.body;
 
-    if (!number || !customer_id || !type) {
-      return res.status(400).json({ error: 'Campos obrigatórios faltando' });
+    if (!customer_id || !type) {
+      return res.status(400).json({ error: 'customer_id e type são obrigatórios' });
+    }
+
+    // Auto-gerar número se não fornecido
+    if (!number) {
+      const { count } = await supabase.from('orders').select('*', { count: 'exact', head: true });
+      const seq = String((count || 0) + 1).padStart(5, '0');
+      number = `OS-${new Date().getFullYear()}-${seq}`;
     }
 
     const { data, error } = await supabase
       .from('orders')
-      .insert([
-        {
-          number,
-          customer_id,
-          type,
-          priority: priority || 'MEDIUM',
-          status: status || 'OPEN',
-          assigned_technician_id,
-          scheduled_date,
-          substation,
-          city,
-          description
-        }
-      ])
-      .select();
+      .insert([{
+        number,
+        customer_id,
+        type,
+        priority: priority || 'MEDIUM',
+        status: status || 'OPEN',
+        assigned_technician_id: assigned_technician_id || null,
+        scheduled_date: scheduled_date || null,
+        substation: substation || null,
+        city: city || null,
+        description: description || null
+      }])
+      .select('*, customers(*), technicians(*)');
 
     if (error) throw error;
 

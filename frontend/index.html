@@ -991,40 +991,42 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
   const [selected, setSelected] = useState(null);
   const [newModal, setNewModal] = useState(false);
   const [toast, setToast]       = useState(null);
+  const [technicians, setTechnicians] = useState([]);
+  const [customers, setCustomers] = useState([]);
 
-  // Carregar ordens da API
   useEffect(() => {
     loadOrders();
+    api.getTechnicians().then(r => { if (r.success) setTechnicians(r.data?.data || r.data || []); });
+    api.getCustomers().then(r => { if (r.success) setCustomers(r.data?.data || r.data || []); });
   }, []);
 
   const loadOrders = async () => {
     setLoading(true);
     const result = await api.getOrders();
     if (result.success) {
-      setOrders(result.data);
+      setOrders(result.data?.data || result.data || []);
     } else {
-      setToast(`Erro ao carregar OS: ${result.error}`);
+      setOrders(OS_INIT);
     }
     setLoading(false);
   };
-  const [newOS, setNewOS]       = useState({ customer:'', type:'Instalação', priority:'MEDIUM', desc:'', date:'', tech:'', substation:'', city:'' });
+  const [newOS, setNewOS]       = useState({ customer_id:'', type:'Instalação', priority:'MEDIUM', description:'', scheduled_date:'', assigned_technician_id:'', substation:'', city:'' });
   const [nfModal, setNfModal]   = useState(false);
   const [nfData, setNfData]     = useState({ number:'', series:'1', date:'', value:'' });
-  const [pendingInvoice, setPendingInvoice] = useState(null); // id da OS aguardando NF
+  const [pendingInvoice, setPendingInvoice] = useState(null);
 
-  const TECHS = ['Carlos Souza','Paulo Mendes','Rafael Lima','Marcos Costa'];
-
-  const advance = (id, nf) => {
-    setOrders(prev=>prev.map(o=>{
-      if (o.id!==id) return o;
-      const flow = STATUS_FLOW[o.status];
-      if (!flow) return o;
-      return { ...o, status:flow.next, ...(nf ? { nf } : {}) };
-    }));
+  const advance = async (id, nf) => {
     const o = orders.find(o=>o.id===id);
-    const flow = STATUS_FLOW[o.status];
-    if (flow) setToast(`OS ${o.number}: ${flow.label} concluído!`);
-    setSelected(prev=>prev?{...prev, status:STATUS_FLOW[prev.status]?.next||prev.status, ...(nf?{nf}:{})}:null);
+    const flow = STATUS_FLOW[o?.status];
+    if (!flow) return;
+    const result = await api.updateOrder(id, { status: flow.next });
+    if (result.success) {
+      setOrders(prev=>prev.map(x=>x.id===id?{...x, status:flow.next, ...(nf?{nf}:{})}:x));
+      setSelected(prev=>prev?{...prev, status:flow.next, ...(nf?{nf}:{})}:null);
+      setToast(`OS ${o.number}: ${flow.label} concluído!`);
+    } else {
+      setToast(`Erro ao avançar OS: ${result.error}`);
+    }
   };
 
   const requestInvoice = id => {
@@ -1042,29 +1044,50 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
     setToast(`NF ${nfData.number} vinculada com sucesso!`);
   };
 
-  const cancel = id => {
-    setOrders(prev=>prev.map(o=>o.id===id?{...o,status:'CANCELLED'}:o));
-    const o=orders.find(o=>o.id===id);
-    setToast(`OS ${o.number} cancelada.`);
-    setSelected(null);
+  const cancel = async id => {
+    const o = orders.find(o=>o.id===id);
+    const result = await api.updateOrder(id, { status: 'CANCELLED' });
+    if (result.success) {
+      setOrders(prev=>prev.map(x=>x.id===id?{...x,status:'CANCELLED'}:x));
+      setToast(`OS ${o?.number} cancelada.`);
+      setSelected(null);
+    } else {
+      setToast(`Erro ao cancelar OS: ${result.error}`);
+    }
   };
 
-  const assignTech = (id, tech) => {
-    setOrders(prev=>prev.map(o=>o.id===id?{...o,tech}:o));
-    setSelected(prev=>prev?{...prev,tech}:null);
+  const assignTech = async (id, assigned_technician_id) => {
+    const result = await api.updateOrder(id, { assigned_technician_id: assigned_technician_id || null });
+    if (result.success) {
+      setOrders(prev=>prev.map(x=>x.id===id?result.data:x));
+      setSelected(prev=>prev?result.data:null);
+    }
   };
 
-  const createOS = () => {
-    if (!newOS.customer||!newOS.date) return;
-    const seq = String(orders.length+148).padStart(5,'0');
-    const order = { id:Date.now(), number:`OS-2026-${seq}`, customer:newOS.customer, type:newOS.type, priority:newOS.priority, status:'OPEN', date:newOS.date, tech:newOS.tech||null, desc:newOS.desc, substation:newOS.substation, city:newOS.city };
-    setOrders(prev=>[order,...prev]);
-    setNewModal(false);
-    setNewOS({ customer:'', type:'Instalação', priority:'MEDIUM', desc:'', date:'', tech:'', substation:'', city:'' });
-    setToast(`OS ${order.number} criada com sucesso!`);
+  const createOS = async () => {
+    if (!newOS.customer_id||!newOS.scheduled_date) return;
+    const result = await api.createOrder({
+      customer_id: newOS.customer_id,
+      type: newOS.type,
+      priority: newOS.priority,
+      status: 'OPEN',
+      scheduled_date: newOS.scheduled_date,
+      assigned_technician_id: newOS.assigned_technician_id || null,
+      description: newOS.description || null,
+      substation: newOS.substation || null,
+      city: newOS.city || null,
+    });
+    if (result.success) {
+      setOrders(prev=>[result.data,...prev]);
+      setNewModal(false);
+      setNewOS({ customer_id:'', type:'Instalação', priority:'MEDIUM', description:'', scheduled_date:'', assigned_technician_id:'', substation:'', city:'' });
+      setToast(`OS ${result.data.number} criada com sucesso!`);
+    } else {
+      setToast(`Erro ao criar OS: ${result.error}`);
+    }
   };
 
-  const filtered = orders.filter(o=>!q||o.number.toLowerCase().includes(q.toLowerCase())||o.customer.toLowerCase().includes(q.toLowerCase()));
+  const filtered = orders.filter(o=>!q||o.number.toLowerCase().includes(q.toLowerCase())||(o.customers?.name||o.customer||'').toLowerCase().includes(q.toLowerCase()));
   const byStatus = Object.fromEntries(COLS.map(c=>[c.key, filtered.filter(o=>o.status===c.key)]));
 
   const OSCard = ({ o }) => (
@@ -1073,11 +1096,11 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
         <span className="text-xs font-mono font-bold text-gray-600">{o.number}</span>
         <PriorityBadge p={o.priority}/>
       </div>
-      <p className="text-sm font-medium text-gray-800 truncate">{o.customer}</p>
+      <p className="text-sm font-medium text-gray-800 truncate">{o.customers?.name||o.customer}</p>
       <p className="text-xs text-gray-500">{o.type}</p>
       <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
-        <span className="flex items-center gap-1"><Icon name="calendar" className="w-3 h-3"/>{fmtDate(o.date)}</span>
-        {o.tech&&<span className="flex items-center gap-1 truncate"><Icon name="user" className="w-3 h-3"/>{o.tech.split(' ')[0]}</span>}
+        <span className="flex items-center gap-1"><Icon name="calendar" className="w-3 h-3"/>{fmtDate(o.scheduled_date||o.date)}</span>
+        {(o.technicians?.name||o.tech)&&<span className="flex items-center gap-1 truncate"><Icon name="user" className="w-3 h-3"/>{(o.technicians?.name||o.tech||'').split(' ')[0]}</span>}
       </div>
       {o.nf&&<div className="mt-1.5 text-xs font-mono font-semibold text-purple-600 bg-purple-50 px-2 py-0.5 rounded">🧾 NF {o.nf.number}</div>}
     </div>
@@ -1132,7 +1155,7 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
                 {filtered.map(o=>(
                   <tr key={o.id} className="hover:bg-gray-50 cursor-pointer" onClick={()=>setSelected(o)}>
                     <td className="px-4 py-3 font-mono text-xs font-semibold text-gray-700">{o.number}</td>
-                    <td className="px-4 py-3 text-gray-800">{o.customer}</td>
+                    <td className="px-4 py-3 text-gray-800">{o.customers?.name||o.customer}</td>
                     <td className="px-4 py-3 text-xs text-gray-500">{o.city||'—'}</td>
                     <td className="px-4 py-3 text-xs text-gray-500 max-w-xs truncate">{o.substation||'—'}</td>
                     <td className="px-4 py-3 text-gray-600">{o.type}</td>
@@ -1143,8 +1166,8 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
                         ? <span className="font-mono text-xs font-semibold text-purple-700 bg-purple-50 px-2 py-0.5 rounded">NF {o.nf.number}</span>
                         : <span className="text-gray-300 text-xs">—</span>}
                     </td>
-                    <td className="px-4 py-3 text-gray-600">{fmtDate(o.date)}</td>
-                    <td className="px-4 py-3 text-gray-600">{o.tech||<span className="text-gray-300">—</span>}</td>
+                    <td className="px-4 py-3 text-gray-600">{fmtDate(o.scheduled_date||o.date)}</td>
+                    <td className="px-4 py-3 text-gray-600">{o.technicians?.name||o.tech||<span className="text-gray-300">—</span>}</td>
                     <td className="px-4 py-3"><button className="text-xs text-blue-600 hover:underline font-medium">Abrir →</button></td>
                   </tr>
                 ))}
@@ -1164,11 +1187,11 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-3">
-                <LabelField label="Cliente"      value={selOS.customer}/>
-                <LabelField label="Data"         value={fmtDate(selOS.date)}/>
+                <LabelField label="Cliente"      value={selOS.customers?.name||selOS.customer||'—'}/>
+                <LabelField label="Data"         value={fmtDate(selOS.scheduled_date||selOS.date)}/>
                 <LabelField label="Cidade"       value={selOS.city||'—'}/>
                 <LabelField label="Subestação"   value={selOS.substation||'—'}/>
-                <LabelField label="Descrição"    value={selOS.desc}/>
+                <LabelField label="Descrição"    value={selOS.description||selOS.desc||'—'}/>
                 {/* Painel fiscal */}
                 {(()=>{
                   const tr = TAX_REGIMES[taxRegime];
@@ -1191,10 +1214,10 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
               <div className="space-y-3">
                 <div>
                   <p className="text-xs text-gray-400 mb-1">Técnico Responsável</p>
-                  <select value={selOS.tech||''} onChange={e=>assignTech(selOS.id,e.target.value||null)}
+                  <select value={selOS.assigned_technician_id||''} onChange={e=>assignTech(selOS.id,e.target.value||null)}
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                     <option value="">Nenhum (não atribuído)</option>
-                    {TECHS.map(t=><option key={t} value={t}>{t}</option>)}
+                    {technicians.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
                   </select>
                 </div>
                 <div className="bg-gray-50 rounded-xl p-4">
@@ -1260,21 +1283,25 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
       {/* Nova OS Modal */}
       <Modal open={newModal} onClose={()=>setNewModal(false)} title="Nova Ordem de Serviço" size="md">
         <div className="space-y-4">
+          <div><label className="block text-sm font-medium text-gray-700 mb-1">Cliente *</label>
+            <select value={newOS.customer_id} onChange={e=>setNewOS(p=>({...p,customer_id:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">Selecione o cliente...</option>
+              {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+            </select></div>
           {[
-            {label:'Cliente *',      key:'customer',    type:'text', placeholder:'Nome do cliente'},
-            {label:'Cidade *',       key:'city',        type:'text', placeholder:'Ex: São José do Rio Preto'},
-            {label:'Subestação / Local', key:'substation', type:'text', placeholder:'Ex: SE Cliente — Sala de Energia'},
-            {label:'Descrição',      key:'desc',        type:'text', placeholder:'Descreva o serviço...'},
-            {label:'Data Agendada *',key:'date',        type:'date', placeholder:''},
+            {label:'Cidade',             key:'city',        type:'text', placeholder:'Ex: São José do Rio Preto'},
+            {label:'Subestação / Local', key:'substation',  type:'text', placeholder:'Ex: SE Cliente — Sala de Energia'},
+            {label:'Descrição',          key:'description', type:'text', placeholder:'Descreva o serviço...'},
+            {label:'Data Agendada *',    key:'scheduled_date', type:'date', placeholder:''},
           ].map(f=>(
             <div key={f.key}><label className="block text-sm font-medium text-gray-700 mb-1">{f.label}</label>
               <input type={f.type} value={newOS[f.key]} onChange={e=>setNewOS(p=>({...p,[f.key]:e.target.value}))} placeholder={f.placeholder}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/></div>
           ))}
           <div><label className="block text-sm font-medium text-gray-700 mb-1">Técnico</label>
-            <select value={newOS.tech} onChange={e=>setNewOS(p=>({...p,tech:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none">
+            <select value={newOS.assigned_technician_id} onChange={e=>setNewOS(p=>({...p,assigned_technician_id:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none">
               <option value="">Nenhum (não atribuído)</option>
-              {TECHS.map(t=><option key={t} value={t}>{t}</option>)}
+              {technicians.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
             </select></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
@@ -1360,9 +1387,9 @@ const CustomersPage = ({ setPage }) => {
     setLoading(true);
     const result = await api.getCustomers();
     if (result.success) {
-      setCustomers(result.data);
+      setCustomers(result.data?.data || result.data || []);
     } else {
-      setToast(`Erro ao carregar clientes: ${result.error}`);
+      setCustomers(CUSTOMERS_INIT);
     }
     setLoading(false);
   };
@@ -1513,45 +1540,59 @@ const ContractTypeName = { MONTHLY:'Mensal', QUARTERLY:'Trimestral', ANNUAL:'Anu
 
 const ContractsPage = ({ taxRegime='REAL' }) => {
   const [contracts, setContracts] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [loading, setLoading]     = useState(true);
   const [q, setQ]                 = useState('');
 
-  // Carregar contratos da API
-  useEffect(() => {
-    loadContracts();
-  }, []);
+  useEffect(() => { loadContracts(); }, []);
 
   const loadContracts = async () => {
     setLoading(true);
-    const result = await api.getContracts();
-    if (result.success) {
-      setContracts(result.data);
-    } else {
-      console.error('Erro ao carregar contratos:', result.error);
-    }
+    const [cRes, custRes] = await Promise.all([api.getContracts(), api.getCustomers()]);
+    if (cRes.success) setContracts(cRes.data?.data || cRes.data || []);
+    if (custRes.success) setCustomers(custRes.data?.data || custRes.data || []);
     setLoading(false);
   };
   const [selected, setSelected]   = useState(null);
   const [newModal, setNewModal]   = useState(false);
   const [toast, setToast]         = useState(null);
-  const [form, setForm]           = useState({ number:'', customer:'', type:'MONTHLY', value:'', start:'', end:'', sla:'24' });
+  const [form, setForm]           = useState({ customer_id:'', type:'MONTHLY', value:'', start_date:'', end_date:'', sla_hours:'24' });
 
-  const list = contracts.filter(c=>!q||c.number.toLowerCase().includes(q.toLowerCase())||c.customer.toLowerCase().includes(q.toLowerCase()));
+  const list = contracts.filter(c=>!q||c.number.toLowerCase().includes(q.toLowerCase())||(c.customers?.name||'').toLowerCase().includes(q.toLowerCase()));
   const totalActive = contracts.filter(c=>c.status==='ACTIVE').reduce((s,c)=>s+c.value,0);
   const expiring = contracts.filter(c=>c.status==='ACTIVE').length;
 
-  const create = () => {
-    if (!form.customer||!form.value||!form.start||!form.end) return;
-    const seq = String(contracts.length+10).padStart(3,'0');
-    const c = { id:Date.now(), number:`CTR-2026-${seq}`, customer:form.customer, type:form.type, value:Math.round(parseFloat(form.value)*100), start:form.start, end:form.end, status:'ACTIVE', sla:parseInt(form.sla)||24 };
-    setContracts(p=>[c,...p]);
-    setNewModal(false);
-    setForm({number:'',customer:'',type:'MONTHLY',value:'',start:'',end:'',sla:'24'});
-    setToast(`Contrato ${c.number} criado com sucesso!`);
+  const create = async () => {
+    if (!form.customer_id||!form.value||!form.start_date||!form.end_date) return;
+    const result = await api.createContract({
+      customer_id: form.customer_id,
+      type: form.type,
+      value: Math.round(parseFloat(form.value)*100),
+      start_date: form.start_date,
+      end_date: form.end_date,
+      sla_hours: parseInt(form.sla_hours)||24,
+      status: 'ACTIVE'
+    });
+    if (result.success) {
+      setContracts(p=>[result.data,...p]);
+      setNewModal(false);
+      setForm({ customer_id:'', type:'MONTHLY', value:'', start_date:'', end_date:'', sla_hours:'24' });
+      setToast(`Contrato ${result.data.number} criado com sucesso!`);
+    } else {
+      setToast(`Erro ao criar contrato: ${result.error}`);
+    }
   };
 
-  const suspend = id => { setContracts(p=>p.map(c=>c.id===id?{...c,status:'SUSPENDED'}:c)); setSelected(null); setToast('Contrato suspenso.'); };
-  const activate = id => { setContracts(p=>p.map(c=>c.id===id?{...c,status:'ACTIVE'}:c)); setSelected(null); setToast('Contrato reativado!'); };
+  const suspend = async id => {
+    const result = await api.updateContract(id, { status: 'SUSPENDED' });
+    if (result.success) { setContracts(p=>p.map(c=>c.id===id?{...c,status:'SUSPENDED'}:c)); setSelected(null); setToast('Contrato suspenso.'); }
+    else setToast(`Erro: ${result.error}`);
+  };
+  const activate = async id => {
+    const result = await api.updateContract(id, { status: 'ACTIVE' });
+    if (result.success) { setContracts(p=>p.map(c=>c.id===id?{...c,status:'ACTIVE'}:c)); setSelected(null); setToast('Contrato reativado!'); }
+    else setToast(`Erro: ${result.error}`);
+  };
 
   const sel = selected ? contracts.find(c=>c.id===selected.id)||selected : null;
 
@@ -1581,11 +1622,11 @@ const ContractsPage = ({ taxRegime='REAL' }) => {
             {list.map(c=>(
               <tr key={c.id} className="hover:bg-gray-50 cursor-pointer" onClick={()=>setSelected(c)}>
                 <td className="px-4 py-3 font-mono text-xs font-semibold text-gray-700">{c.number}</td>
-                <td className="px-4 py-3 font-medium text-gray-800">{c.customer}</td>
+                <td className="px-4 py-3 font-medium text-gray-800">{c.customers?.name||c.customer||'—'}</td>
                 <td className="px-4 py-3 text-gray-600">{ContractTypeName[c.type]}</td>
                 <td className="px-4 py-3 font-medium text-gray-800">{fmt(c.value)}</td>
-                <td className="px-4 py-3 text-gray-600">{c.sla}h</td>
-                <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(c.start)} → {fmtDate(c.end)}</td>
+                <td className="px-4 py-3 text-gray-600">{c.sla_hours||c.sla||'—'}h</td>
+                <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(c.start_date||c.start)} → {fmtDate(c.end_date||c.end)}</td>
                 <td className="px-4 py-3"><Badge status={c.status}/></td>
                 <td className="px-4 py-3"><button className="text-xs text-blue-600 hover:underline font-medium">Abrir →</button></td>
               </tr>
@@ -1600,12 +1641,12 @@ const ContractsPage = ({ taxRegime='REAL' }) => {
           <div className="space-y-5">
             <Badge status={sel.status}/>
             <div className="grid grid-cols-2 gap-4">
-              <LabelField label="Cliente"    value={sel.customer}/>
+              <LabelField label="Cliente"    value={sel.customers?.name||sel.customer||'—'}/>
               <LabelField label="Tipo"       value={ContractTypeName[sel.type]}/>
               <LabelField label="Valor/Ciclo" value={fmt(sel.value)}/>
-              <LabelField label="SLA"        value={`${sel.sla}h`}/>
-              <LabelField label="Início"     value={fmtDate(sel.start)}/>
-              <LabelField label="Encerramento" value={fmtDate(sel.end)}/>
+              <LabelField label="SLA"        value={`${sel.sla_hours||sel.sla||'—'}h`}/>
+              <LabelField label="Início"     value={fmtDate(sel.start_date||sel.start)}/>
+              <LabelField label="Encerramento" value={fmtDate(sel.end_date||sel.end)}/>
             </div>
             {/* Painel fiscal do contrato */}
             {(()=>{ const tr=TAX_REGIMES[taxRegime]; const iss=tr.iss?Math.round(sel.value*tr.iss):null; return (
@@ -1641,10 +1682,14 @@ const ContractsPage = ({ taxRegime='REAL' }) => {
       {/* Novo Contrato Modal */}
       <Modal open={newModal} onClose={()=>setNewModal(false)} title="Novo Contrato" size="md">
         <div className="space-y-4">
+          <div><label className="block text-sm font-medium text-gray-700 mb-1">Cliente *</label>
+            <select value={form.customer_id} onChange={e=>setForm(p=>({...p,customer_id:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">Selecione o cliente...</option>
+              {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+            </select></div>
           {[
-            {label:'Cliente *',     key:'customer', placeholder:'Nome do cliente'},
-            {label:'Valor (R$) *',  key:'value',    placeholder:'0,00', type:'number'},
-            {label:'SLA (horas)',   key:'sla',      placeholder:'24',   type:'number'},
+            {label:'Valor (R$) *',  key:'value',      placeholder:'0,00', type:'number'},
+            {label:'SLA (horas)',   key:'sla_hours',  placeholder:'24',   type:'number'},
           ].map(f=>(
             <div key={f.key}><label className="block text-sm font-medium text-gray-700 mb-1">{f.label}</label>
               <input type={f.type||'text'} value={form[f.key]} onChange={e=>setForm(p=>({...p,[f.key]:e.target.value}))} placeholder={f.placeholder}
@@ -1656,9 +1701,9 @@ const ContractsPage = ({ taxRegime='REAL' }) => {
             </select></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Início *</label>
-              <input type="date" value={form.start} onChange={e=>setForm(p=>({...p,start:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none"/></div>
+              <input type="date" value={form.start_date} onChange={e=>setForm(p=>({...p,start_date:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none"/></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Encerramento *</label>
-              <input type="date" value={form.end} onChange={e=>setForm(p=>({...p,end:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none"/></div>
+              <input type="date" value={form.end_date} onChange={e=>setForm(p=>({...p,end_date:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none"/></div>
           </div>
           <div className="flex gap-2 pt-2">
             <button onClick={()=>setNewModal(false)} className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
@@ -1769,7 +1814,7 @@ const PAYROLL_INIT = [
     inssPatronal:64000, fgts:25600, rat:6400, sistemaS:18496, prov13:26667, provFerias:35556, fgtsProv:4978 },
 ];
 
-const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseCats=EXPENSE_CATS_INIT, bankAccounts=BANK_ACCOUNTS_INIT, payMethods=PAYMENT_METHODS_INIT }) => {
+const FinancialPage = ({ taxRegime='REAL' }) => {
   const [tab, setTab]           = useState('receivable');
   const [statusR, setStatusR]   = useState('all');
   const [statusP, setStatusP]   = useState('all');
@@ -1785,10 +1830,28 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
   const [drePeriod, setDrePeriod] = useState('Q1-2026');
   const [budPeriod, setBudPeriod] = useState('2026-03');
   const [approvalSel, setApprovalSel] = useState(new Set());
-  const [transactions, setTx]   = useState(TRANSACTIONS_INIT);
+  const [transactions, setTx]   = useState([]);
+  const [incomeCats,   setIncomeCats]   = useState(INCOME_CATS_INIT.map(n=>({id:n,name:n})));
+  const [expenseCats,  setExpenseCats]  = useState(EXPENSE_CATS_INIT.map(n=>({id:n,name:n})));
+  const [bankAccounts, setBankAccounts] = useState(BANK_ACCOUNTS_INIT);
+  const [payMethods,   setPayMethods]   = useState(PAYMENT_METHODS_INIT);
   const [toast, setToast]       = useState(null);
   const [newTxModal, setNewTxModal] = useState(false);
-  const [newTx, setNewTx]       = useState({ type:'INCOME', desc:'', amount:'', due:'', cat:'', account:'', payMethod:'' });
+  const [newTx, setNewTx]       = useState({ type:'INCOME', description:'', amount:'', due_date:'', category_id:'', bank_account_id:'', payment_method_id:'' });
+
+  useEffect(() => { loadFinancialData(); }, []);
+  const loadFinancialData = async () => {
+    const [txRes, catRes, baRes, pmRes] = await Promise.all([
+      api.getTransactions(), api.getCategories(), api.getBankAccounts(), api.getPaymentMethods()
+    ]);
+    if (txRes.success)  setTx(txRes.data?.data || txRes.data || []);
+    if (catRes.success) {
+      if (catRes.data?.income)  setIncomeCats(catRes.data.income);
+      if (catRes.data?.expense) setExpenseCats(catRes.data.expense);
+    }
+    if (baRes.success)  setBankAccounts(baRes.data?.data || baRes.data || BANK_ACCOUNTS_INIT);
+    if (pmRes.success)  setPayMethods(pmRes.data?.data || pmRes.data || PAYMENT_METHODS_INIT);
+  };
   const [importModal, setImportModal] = useState(null);
   const [importText, setImportText]   = useState('');
   // Folha Salarial — estados no topo (hooks não podem ficar dentro de IIFE)
@@ -1879,17 +1942,38 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
     ['2026-01','Janeiro 2026'],['2025-12','Dezembro 2025'],['2025-11','Novembro 2025'],
   ];
 
-  const settle = id => {
-    setTx(prev=>prev.map(t=>t.id!==id?t:{...t,status:t.type==='INCOME'?'RECEIVED':'PAID'}));
-    const tx=transactions.find(t=>t.id===id);
-    setToast(tx?.type==='INCOME'?'Recebimento registrado!':'Pagamento registrado!');
+  const settle = async id => {
+    const tx = transactions.find(t=>t.id===id);
+    const newStatus = tx?.type==='INCOME' ? 'RECEIVED' : 'PAID';
+    const today = new Date().toISOString().split('T')[0];
+    const result = await api.updateTransaction(id, { status: newStatus, paid_date: today });
+    if (result.success) {
+      setTx(prev=>prev.map(t=>t.id!==id?t:{...t,status:newStatus,paid_date:today}));
+      setToast(tx?.type==='INCOME'?'Recebimento registrado!':'Pagamento registrado!');
+    } else {
+      setToast(`Erro: ${result.error}`);
+    }
   };
-  const addTx = () => {
-    if (!newTx.desc||!newTx.amount||!newTx.due) return;
-    setTx(prev=>[...prev,{...newTx,id:Date.now(),amount:Math.round(parseFloat(newTx.amount)*100),status:'PENDING'}]);
-    setNewTxModal(false);
-    setNewTx({type:'EXPENSE',desc:'',amount:'',due:'',cat:'',account:'Conta Corrente Bradesco'});
-    setToast('Lançamento criado!');
+  const addTx = async () => {
+    if (!newTx.description||!newTx.amount||!newTx.due_date) return;
+    const result = await api.createTransaction({
+      type: newTx.type,
+      description: newTx.description,
+      amount: Math.round(parseFloat(newTx.amount)*100),
+      due_date: newTx.due_date,
+      category_id: newTx.category_id || null,
+      bank_account_id: newTx.bank_account_id || null,
+      payment_method_id: newTx.payment_method_id || null,
+      status: 'PENDING'
+    });
+    if (result.success) {
+      setTx(prev=>[result.data,...prev]);
+      setNewTxModal(false);
+      setNewTx({ type:'EXPENSE', description:'', amount:'', due_date:'', category_id:'', bank_account_id:'', payment_method_id:'' });
+      setToast('Lançamento criado!');
+    } else {
+      setToast(`Erro ao criar lançamento: ${result.error}`);
+    }
   };
 
   const parseImport = () => {
@@ -1921,8 +2005,8 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
     while (cur <= end) {
       const dateStr = cur.toISOString().split('T')[0];
       const dd = dateStr.slice(8,10)+'/'+dateStr.slice(5,7);
-      const ins  = transactions.filter(t=>t.type==='INCOME'  && t.due===dateStr && t.status!=='RECEIVED').reduce((s,t)=>s+t.amount,0);
-      const outs = transactions.filter(t=>t.type==='EXPENSE' && t.due===dateStr && t.status!=='PAID').reduce((s,t)=>s+t.amount,0);
+      const ins  = transactions.filter(t=>t.type==='INCOME'  && txDue(t)===dateStr && t.status!=='RECEIVED').reduce((s,t)=>s+t.amount,0);
+      const outs = transactions.filter(t=>t.type==='EXPENSE' && txDue(t)===dateStr && t.status!=='PAID').reduce((s,t)=>s+t.amount,0);
       if (ins>0||outs>0) days.push({ date:dd, dateStr, ins, outs, diff:ins-outs });
       cur.setDate(cur.getDate()+1);
     }
@@ -1956,11 +2040,11 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
           {txList.length===0&&<tr><td colSpan="8" className="px-4 py-8 text-center text-sm text-gray-400">Nenhum lançamento encontrado</td></tr>}
           {txList.map(t=>(
             <tr key={t.id} className={`hover:bg-gray-50 ${t.status==='OVERDUE'?'bg-red-50':t.status==='PAID'||t.status==='RECEIVED'?'bg-green-50/30':''}`}>
-              <td className="px-4 py-3 max-w-xs"><p className="text-gray-800 truncate">{t.desc}</p></td>
-              <td className="px-4 py-3 text-xs text-gray-500">{t.cat}</td>
-              <td className="px-4 py-3 text-xs text-gray-500">{t.account||<span className="text-gray-300">—</span>}</td>
-              <td className="px-4 py-3 text-xs text-gray-500">{t.payMethod||<span className="text-gray-300">—</span>}</td>
-              <td className="px-4 py-3 text-gray-600">{fmtDate(t.due)}</td>
+              <td className="px-4 py-3 max-w-xs"><p className="text-gray-800 truncate">{t.description||t.desc}</p></td>
+              <td className="px-4 py-3 text-xs text-gray-500">{txCatName(t)}</td>
+              <td className="px-4 py-3 text-xs text-gray-500">{bankAccounts.find(b=>b.id===t.bank_account_id)?.name||t.account||<span className="text-gray-300">—</span>}</td>
+              <td className="px-4 py-3 text-xs text-gray-500">{payMethods.find(m=>m.id===t.payment_method_id)?.name||t.payMethod||<span className="text-gray-300">—</span>}</td>
+              <td className="px-4 py-3 text-gray-600">{fmtDate(txDue(t))}</td>
               <td className="px-4 py-3 font-semibold text-gray-800">{fmt(t.amount)}</td>
               <td className="px-4 py-3"><Badge status={t.status}/></td>
               <td className="px-4 py-3">
@@ -2105,24 +2189,27 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
   const pendingIn  = transactions.filter(t=>t.type==='INCOME'  && (t.status==='PENDING'||t.status==='OVERDUE')).reduce((s,t)=>s+t.amount,0);
   const pendingOut = transactions.filter(t=>t.type==='EXPENSE' && (t.status==='PENDING'||t.status==='OVERDUE')).reduce((s,t)=>s+t.amount,0);
 
+  const txCatName = t => (incomeCats.concat(expenseCats).find(c=>c.id===t.category_id)?.name) || t.cat || '—';
+  const txDue = t => t.due_date || t.due || '';
+
   const receivable = transactions.filter(t=>
     t.type==='INCOME' &&
     (statusR==='all'||t.status===statusR) &&
-    (catR==='all'||t.cat===catR) &&
-    (!dateFromR||t.due>=dateFromR) &&
-    (!dateToR  ||t.due<=dateToR)
+    (catR==='all'||txCatName(t)===catR) &&
+    (!dateFromR||txDue(t)>=dateFromR) &&
+    (!dateToR  ||txDue(t)<=dateToR)
   );
   const payable = transactions.filter(t=>
     t.type==='EXPENSE' &&
     (statusP==='all'||t.status===statusP) &&
-    (catP==='all'||t.cat===catP) &&
-    (!dateFromP||t.due>=dateFromP) &&
-    (!dateToP  ||t.due<=dateToP)
+    (catP==='all'||txCatName(t)===catP) &&
+    (!dateFromP||txDue(t)>=dateFromP) &&
+    (!dateToP  ||txDue(t)<=dateToP)
   );
 
-  const TODAY = '2026-04-05';
+  const TODAY = new Date().toISOString().split('T')[0];
   const approvalQueue = transactions.filter(t=>
-    (t.status==='PENDING'||t.status==='OVERDUE') && t.due<=TODAY
+    (t.status==='PENDING'||t.status==='OVERDUE') && txDue(t)<=TODAY
   );
 
   const MENU_ITEMS = [
@@ -2191,14 +2278,14 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
                 </select>
                 <select value={catR} onChange={e=>setCatR(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none">
                   <option value="all">Todas as categorias</option>
-                  {incomeCats.map(c=><option key={c} value={c}>{c}</option>)}
+                  {incomeCats.map(c=><option key={c.id||c} value={c.name||c}>{c.name||c}</option>)}
                 </select>
                 <DateFilter from={dateFromR} setFrom={setDateFromR} to={dateToR} setTo={setDateToR}/>
                 {hasFilter&&
                   <button onClick={()=>{setDateFromR('');setDateToR('');setStatusR('all');setCatR('all');}}
                     className="text-xs text-gray-400 hover:text-red-500 px-2 py-1 border border-gray-200 rounded-lg">Limpar filtros</button>}
                 <button onClick={()=>setImportModal('INCOME')} className="flex items-center gap-1.5 text-sm border border-gray-200 text-gray-600 px-3 py-2 rounded-lg hover:bg-gray-50">↑ Importar planilha</button>
-                <button onClick={()=>{setNewTx({type:'INCOME',desc:'',amount:'',due:'',cat:incomeCats[0]||'',account:bankAccounts.find(b=>b.active)?.bank||'',payMethod:payMethods.find(p=>p.active)?.name||''});setNewTxModal(true);}} className="ml-auto flex items-center gap-1.5 bg-green-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-green-700"><Icon name="plus" className="w-4 h-4"/> Novo Recebimento</button>
+                <button onClick={()=>{setNewTx({type:'INCOME',description:'',amount:'',due_date:'',category_id:'',bank_account_id:'',payment_method_id:''});setNewTxModal(true);}} className="ml-auto flex items-center gap-1.5 bg-green-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-green-700"><Icon name="plus" className="w-4 h-4"/> Novo Recebimento</button>
               </div>
               <TxTable txList={receivable} btnLabel="Baixar" onSettle={settle}/>
             </div>
@@ -2238,14 +2325,14 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
                 </select>
                 <select value={catP} onChange={e=>setCatP(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none">
                   <option value="all">Todas as categorias</option>
-                  {expenseCats.map(c=><option key={c} value={c}>{c}</option>)}
+                  {expenseCats.map(c=><option key={c.id||c} value={c.name||c}>{c.name||c}</option>)}
                 </select>
                 <DateFilter from={dateFromP} setFrom={setDateFromP} to={dateToP} setTo={setDateToP}/>
                 {hasFilter&&
                   <button onClick={()=>{setDateFromP('');setDateToP('');setStatusP('all');setCatP('all');}}
                     className="text-xs text-gray-400 hover:text-red-500 px-2 py-1 border border-gray-200 rounded-lg">Limpar filtros</button>}
                 <button onClick={()=>setImportModal('EXPENSE')} className="flex items-center gap-1.5 text-sm border border-gray-200 text-gray-600 px-3 py-2 rounded-lg hover:bg-gray-50">↑ Importar planilha</button>
-                <button onClick={()=>{setNewTx({type:'EXPENSE',desc:'',amount:'',due:'',cat:expenseCats[0]||'',account:bankAccounts.find(b=>b.active)?.bank||'',payMethod:payMethods.find(p=>p.active)?.name||''});setNewTxModal(true);}} className="ml-auto flex items-center gap-1.5 bg-red-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-red-700"><Icon name="plus" className="w-4 h-4"/> Nova Despesa</button>
+                <button onClick={()=>{setNewTx({type:'EXPENSE',description:'',amount:'',due_date:'',category_id:'',bank_account_id:'',payment_method_id:''});setNewTxModal(true);}} className="ml-auto flex items-center gap-1.5 bg-red-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-red-700"><Icon name="plus" className="w-4 h-4"/> Nova Despesa</button>
               </div>
               <TxTable txList={payable} btnLabel="Pagar" onSettle={settle}/>
             </div>
@@ -2885,13 +2972,13 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
                           <label key={t.id} className={`flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 border-b border-gray-100 last:border-0 transition-colors ${approvalSel.has(t.id)?'bg-violet-50 border-violet-100':''}`}>
                             <input type="checkbox" checked={approvalSel.has(t.id)} onChange={()=>toggleSel(t.id)} className="mt-0.5 w-4 h-4 shrink-0 accent-violet-600"/>
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm text-gray-800 font-medium truncate">{t.desc}</p>
+                              <p className="text-sm text-gray-800 font-medium truncate">{t.description||t.desc}</p>
                               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                <span className="text-xs text-gray-400">{t.cat}</span>
-                                {t.account&&<span className="text-xs text-gray-400">· {t.account}</span>}
-                                {t.payMethod&&<span className="text-xs text-gray-400">· {t.payMethod}</span>}
+                                <span className="text-xs text-gray-400">{txCatName(t)}</span>
+                                {(bankAccounts.find(b=>b.id===t.bank_account_id)?.name||t.account)&&<span className="text-xs text-gray-400">· {bankAccounts.find(b=>b.id===t.bank_account_id)?.name||t.account}</span>}
+                                {(payMethods.find(m=>m.id===t.payment_method_id)?.name||t.payMethod)&&<span className="text-xs text-gray-400">· {payMethods.find(m=>m.id===t.payment_method_id)?.name||t.payMethod}</span>}
                                 <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${t.status==='OVERDUE'?'bg-red-100 text-red-700':'bg-amber-100 text-amber-700'}`}>{t.status==='OVERDUE'?'Vencido':'Pendente'}</span>
-                                <span className="text-xs text-gray-400">venc. {fmtDate(t.due)}</span>
+                                <span className="text-xs text-gray-400">venc. {fmtDate(txDue(t))}</span>
                               </div>
                             </div>
                             <span className={`text-sm font-bold shrink-0 ${approvalSel.has(t.id)?'text-violet-700':'text-red-600'}`}>{fmt(t.amount)}</span>
@@ -2913,11 +3000,11 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
                           <label key={t.id} className={`flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 border-b border-gray-100 last:border-0 transition-colors ${approvalSel.has(t.id)?'bg-violet-50 border-violet-100':''}`}>
                             <input type="checkbox" checked={approvalSel.has(t.id)} onChange={()=>toggleSel(t.id)} className="mt-0.5 w-4 h-4 shrink-0 accent-violet-600"/>
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm text-gray-800 font-medium truncate">{t.desc}</p>
+                              <p className="text-sm text-gray-800 font-medium truncate">{t.description||t.desc}</p>
                               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                <span className="text-xs text-gray-400">{t.cat}</span>
+                                <span className="text-xs text-gray-400">{txCatName(t)}</span>
                                 <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Pendente</span>
-                                <span className="text-xs text-gray-400">venc. {fmtDate(t.due)}</span>
+                                <span className="text-xs text-gray-400">venc. {fmtDate(txDue(t))}</span>
                               </div>
                             </div>
                             <span className={`text-sm font-bold shrink-0 ${approvalSel.has(t.id)?'text-violet-700':'text-green-600'}`}>{fmt(t.amount)}</span>
@@ -3054,28 +3141,29 @@ const FinancialPage = ({ taxRegime='REAL', incomeCats=INCOME_CATS_INIT, expenseC
           <div className="space-y-4">
             <div className="flex gap-2">
               {[['INCOME','↑ Recebimento'],['EXPENSE','↓ Despesa']].map(([v,l])=>(
-                <button key={v} onClick={()=>setNewTx(p=>({...p,type:v,cat:v==='INCOME'?incomeCats[0]||'':expenseCats[0]||''}))} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${newTx.type===v?(v==='INCOME'?'bg-green-600 text-white border-green-600':'bg-red-600 text-white border-red-600'):'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>{l}</button>
+                <button key={v} onClick={()=>setNewTx(p=>({...p,type:v,category_id:''}))} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${newTx.type===v?(v==='INCOME'?'bg-green-600 text-white border-green-600':'bg-red-600 text-white border-red-600'):'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>{l}</button>
               ))}
             </div>
-            {[{label:'Descrição *',key:'desc',type:'text',placeholder:'Ex: Fatura Hospital Regional'},{label:'Valor (R$) *',key:'amount',type:'number',placeholder:'0,00'},{label:'Vencimento *',key:'due',type:'date',placeholder:''}].map(f=>(
+            {[{label:'Descrição *',key:'description',type:'text',placeholder:'Ex: Fatura Hospital Regional'},{label:'Valor (R$) *',key:'amount',type:'number',placeholder:'0,00'},{label:'Vencimento *',key:'due_date',type:'date',placeholder:''}].map(f=>(
               <div key={f.key}><label className="block text-sm font-medium text-gray-700 mb-1">{f.label}</label>
                 <input type={f.type} value={newTx[f.key]} onChange={e=>setNewTx(p=>({...p,[f.key]:e.target.value}))} placeholder={f.placeholder}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/></div>
             ))}
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Categoria</label>
-              <select value={newTx.cat} onChange={e=>setNewTx(p=>({...p,cat:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                {(newTx.type==='INCOME'?incomeCats:expenseCats).map(c=><option key={c} value={c}>{c}</option>)}
+              <select value={newTx.category_id} onChange={e=>setNewTx(p=>({...p,category_id:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">Sem categoria</option>
+                {(newTx.type==='INCOME'?incomeCats:expenseCats).map(c=><option key={c.id||c} value={c.id||c}>{c.name||c}</option>)}
               </select></div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Conta Bancária</label>
-                <select value={newTx.account} onChange={e=>setNewTx(p=>({...p,account:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <select value={newTx.bank_account_id} onChange={e=>setNewTx(p=>({...p,bank_account_id:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                   <option value="">Selecionar...</option>
-                  {bankAccounts.filter(b=>b.active).map(b=><option key={b.id} value={b.bank}>{b.bank} — {b.account}</option>)}
+                  {bankAccounts.map(b=><option key={b.id} value={b.id}>{b.name||b.bank_name||b.bank} — {b.account_number||b.account||''}</option>)}
                 </select></div>
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Forma de Pagamento</label>
-                <select value={newTx.payMethod} onChange={e=>setNewTx(p=>({...p,payMethod:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <select value={newTx.payment_method_id} onChange={e=>setNewTx(p=>({...p,payment_method_id:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                   <option value="">Selecionar...</option>
-                  {payMethods.filter(m=>m.active).map(m=><option key={m.id} value={m.name}>{m.name}</option>)}
+                  {payMethods.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
                 </select></div>
             </div>
             <div className="flex gap-2 pt-2">
@@ -4100,7 +4188,7 @@ function App() {
       case 'orders':      return <OrdersPage taxRegime={taxRegime}/>;
       case 'customers':   return <CustomersPage setPage={setPage}/>;
       case 'contracts':   return <ContractsPage taxRegime={taxRegime}/>;
-      case 'financial':   return <FinancialPage taxRegime={taxRegime} incomeCats={incomeCats} expenseCats={expenseCats} bankAccounts={bankAccounts} payMethods={payMethods}/>;
+      case 'financial':   return <FinancialPage taxRegime={taxRegime}/>;
       case 'inventory':   return <InventoryPage/>;
       case 'technicians': return <TechniciansPage/>;
       case 'fleet':       return <FleetPage/>;

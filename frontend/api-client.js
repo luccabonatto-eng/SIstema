@@ -247,6 +247,21 @@ class OpticomAPI {
     const params = new URLSearchParams(filters);
     return this._fetch(`/audit?${params}`);
   }
+
+  // === Categorias ===
+  async getCategories() {
+    return this._fetch('/categories');
+  }
+
+  // === Contas Bancárias ===
+  async getBankAccounts() {
+    return this._fetch('/bank-accounts');
+  }
+
+  // === Métodos de Pagamento ===
+  async getPaymentMethods() {
+    return this._fetch('/payment-methods');
+  }
 }
 
 // Instância global
