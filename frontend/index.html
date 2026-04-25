@@ -468,10 +468,9 @@ const MENU = [
   { id:'contracts',   label:'Contratos',         icon:'contracts',   group:'Cadastro' },
   { id:'technicians', label:'Técnicos',          icon:'technicians', group:'Cadastro' },
   { id:'settings',    label:'Configurações',     icon:'settings',    group:'Sistema'  },
-  { id:'audit',       label:'Auditoria',         icon:'audit',       group:'Sistema'  },
 ];
 
-const Sidebar = ({ page, setPage, collapsed, setCollapsed }) => {
+const Sidebar = ({ page, setPage, collapsed, setCollapsed, user }) => {
   const ungrouped = MENU.filter(m=>!m.group);
   const groups = [...new Set(MENU.filter(m=>m.group).map(m=>m.group))];
   const NavBtn = ({ m }) => (
@@ -511,11 +510,11 @@ const Sidebar = ({ page, setPage, collapsed, setCollapsed }) => {
       <div className={`px-4 py-3 border-t border-gray-800 ${collapsed?'flex justify-center':''}`}>
         {!collapsed ? (
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-sm font-bold shrink-0">{MOCK_USER.name[0]}</div>
-            <div className="min-w-0"><p className="text-sm font-medium truncate">{MOCK_USER.name}</p><p className="text-xs text-gray-400">{MOCK_USER.role}</p></div>
+            <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-sm font-bold shrink-0">{(user?.name||'?')[0]}</div>
+            <div className="min-w-0"><p className="text-sm font-medium truncate">{user?.name||'Usuário'}</p><p className="text-xs text-gray-400">{user?.role||''}</p></div>
           </div>
         ) : (
-          <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-sm font-bold">{MOCK_USER.name[0]}</div>
+          <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-sm font-bold">{(user?.name||'?')[0]}</div>
         )}
       </div>
     </aside>
@@ -524,9 +523,9 @@ const Sidebar = ({ page, setPage, collapsed, setCollapsed }) => {
 
 // ─── HEADER ───────────────────────────────────────────────────────────────────
 
-const TITLES = { dashboard:'Dashboard', orders:'Ordens de Serviço', customers:'Clientes', contracts:'Contratos', financial:'Financeiro', inventory:'Estoque', technicians:'Técnicos', fleet:'Frota', settings:'Configurações', audit:'Auditoria' };
+const TITLES = { dashboard:'Dashboard', orders:'Ordens de Serviço', customers:'Clientes', contracts:'Contratos', financial:'Financeiro', inventory:'Estoque', technicians:'Técnicos', fleet:'Frota', settings:'Configurações' };
 
-const Header = ({ page, onLogout, setPage, regime }) => {
+const Header = ({ page, onLogout, setPage, regime, user }) => {
   const [notifOpen, setNotifOpen] = useState(false);
   const [dismissed, setDismissed] = useState([]);
   const visible = MOCK_ALERTS.filter(a=>!dismissed.includes(a.id));
@@ -573,10 +572,10 @@ const Header = ({ page, onLogout, setPage, regime }) => {
           )}
         </div>
         <div className="flex items-center gap-2 text-sm text-gray-600 border-l border-gray-200 pl-3">
-          <div className="w-7 h-7 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">{MOCK_USER.name[0]}</div>
+          <div className="w-7 h-7 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">{(user?.name||'?')[0]}</div>
           <div className="hidden sm:block">
-            <p className="text-sm font-medium text-gray-700">{MOCK_USER.name}</p>
-            <p className="text-xs text-gray-400">{MOCK_USER.company.name}</p>
+            <p className="text-sm font-medium text-gray-700">{user?.name||'Usuário'}</p>
+            <p className="text-xs text-gray-400">{user?.company?.name||'Opticom'}</p>
           </div>
         </div>
         <button onClick={onLogout} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors">
@@ -724,17 +723,71 @@ const DashboardPage = ({ setPage, taxRegime='REAL' }) => {
   const [toast, setToast] = useState(null);
   const [pipelineFrom, setPipelineFrom] = useState('');
   const [pipelineTo, setPipelineTo] = useState('');
+  const [stats, setStats] = useState({ openOrders:0, completedOrders:0, invoicedOrders:0, activeContracts:0, totalCustomers:0, lowStockItems:0, receivedRevenue:0, paidExpense:0, pendingRevenue:0, pendingExpense:0 });
+  const [allOrders, setAllOrders] = useState([]);
+  const [alerts, setAlerts] = useState([]);
   const d = PERIOD_DATA[period];
 
+  useEffect(() => { loadDashboard(); }, []);
+
+  const loadDashboard = async () => {
+    const [ordRes, custRes, ctRes, txRes, prodRes] = await Promise.all([
+      api.getOrders({ limit:100 }),
+      api.getCustomers(),
+      api.getContracts(),
+      api.getTransactions({ limit:100 }),
+      api.getProducts(),
+    ]);
+    const orders   = ordRes.success  ? (ordRes.data?.data  || ordRes.data  || []) : [];
+    const customers= custRes.success ? (custRes.data?.data || custRes.data || []) : [];
+    const contracts= ctRes.success   ? (ctRes.data?.data   || ctRes.data   || []) : [];
+    const txs      = txRes.success   ? (txRes.data?.data   || txRes.data   || []) : [];
+    const products = prodRes.success ? (prodRes.data?.data || prodRes.data || []) : [];
+
+    const openSt = ['OPEN','SCHEDULED','IN_TRANSIT','IN_PROGRESS'];
+    const receivedRevenue = txs.filter(t=>t.type==='INCOME'&&t.status==='RECEIVED').reduce((s,t)=>s+(t.amount||0),0);
+    const paidExpense     = txs.filter(t=>t.type==='EXPENSE'&&t.status==='PAID').reduce((s,t)=>s+(t.amount||0),0);
+    const pendingRevenue  = txs.filter(t=>t.type==='INCOME'&&t.status==='PENDING').reduce((s,t)=>s+(t.amount||0),0);
+    const pendingExpense  = txs.filter(t=>t.type==='EXPENSE'&&t.status==='PENDING').reduce((s,t)=>s+(t.amount||0),0);
+
+    setStats({
+      openOrders:       orders.filter(o=>openSt.includes(o.status)).length,
+      completedOrders:  orders.filter(o=>o.status==='COMPLETED').length,
+      invoicedOrders:   orders.filter(o=>o.status==='INVOICED').length,
+      activeContracts:  contracts.filter(c=>c.status==='ACTIVE').length,
+      totalCustomers:   customers.length,
+      lowStockItems:    products.filter(p=>(p.quantity||0)<=(p.min_stock||0)&&(p.min_stock||0)>0).length,
+      receivedRevenue, paidExpense, pendingRevenue, pendingExpense,
+    });
+    setAllOrders(orders);
+
+    const now = new Date();
+    const in30 = new Date(); in30.setDate(in30.getDate()+30);
+    const newAlerts = [];
+    orders.filter(o=>o.scheduled_date&&new Date(o.scheduled_date)<now&&openSt.includes(o.status)).slice(0,3).forEach(o=>{
+      newAlerts.push({id:`os-${o.id}`,severity:'HIGH',title:'OS em atraso',message:`${o.number} — agendada ${new Date(o.scheduled_date).toLocaleDateString('pt-BR')}`,type:'OVERDUE_ORDER'});
+    });
+    contracts.filter(c=>c.status==='ACTIVE'&&c.end_date&&new Date(c.end_date)<=in30).slice(0,3).forEach(c=>{
+      newAlerts.push({id:`ct-${c.id}`,severity:'MEDIUM',title:'Contrato expirando',message:`${c.number} expira em ${new Date(c.end_date).toLocaleDateString('pt-BR')}`,type:'CONTRACT_EXPIRING'});
+    });
+    products.filter(p=>(p.quantity||0)<=(p.min_stock||0)&&(p.min_stock||0)>0).slice(0,2).forEach(p=>{
+      newAlerts.push({id:`inv-${p.id}`,severity:'MEDIUM',title:'Estoque crítico',message:`"${p.name}" — ${p.quantity||0} un. (mín: ${p.min_stock||0})`,type:'LOW_STOCK'});
+    });
+    txs.filter(t=>t.due_date&&new Date(t.due_date)<now&&t.status==='PENDING').slice(0,2).forEach(t=>{
+      newAlerts.push({id:`tx-${t.id}`,severity:t.type==='INCOME'?'HIGH':'MEDIUM',title:t.type==='INCOME'?'Recebimento em atraso':'Pagamento em atraso',message:`${t.description||'—'} — venceu ${new Date(t.due_date).toLocaleDateString('pt-BR')}`,type:t.type==='INCOME'?'OVERDUE_RECEIVABLE':'OVERDUE_PAYABLE'});
+    });
+    setAlerts(newAlerts);
+  };
+
   const openPipeline = step => {
-    const cfgs = {
-      realizadas:{ title:'OS Realizadas — aguardando envio',     data:MOCK_PIPELINE.realizadas, cols:['Nº OS','Cliente','Tipo','Técnico','Data','Valor'],    row:r=>[r.number,r.customer,r.type,r.tech,r.date,fmt(r.value)] },
-      enviadas:  { title:'OS Enviadas para Aprovação',           data:MOCK_PIPELINE.enviadas,   cols:['Nº OS','Cliente','Tipo','Técnico','Enviada em','Valor'],row:r=>[r.number,r.customer,r.type,r.tech,r.date,fmt(r.value)] },
-      aprovadas: { title:'OS Aprovadas pelo Cliente',            data:MOCK_PIPELINE.aprovadas,  cols:['Nº OS','Cliente','Tipo','Técnico','Aprovada em','Valor'],row:r=>[r.number,r.customer,r.type,r.tech,r.date,fmt(r.value)] },
-      nf:        { title:'Nota Fiscal Emitida',                  data:MOCK_PIPELINE.nf,         cols:['Nº OS','Cliente','Tipo','NF Emitida','Data','Valor'],  row:r=>[r.number,r.customer,r.type,r.nf,r.date,fmt(r.value)] },
-      pagas:     { title:'OS Pagas — Recebimento Confirmado',    data:MOCK_PIPELINE.pagas,      cols:['Nº OS','Cliente','Tipo','NF','Data Pgto','Valor'],     row:r=>[r.number,r.customer,r.type,r.nf,r.date,fmt(r.value)] },
-    };
-    setPipelineModal(cfgs[step]);
+    const statusMap = { open:'OPEN', scheduled:'SCHEDULED', progress:'IN_TRANSIT,IN_PROGRESS', completed:'COMPLETED', invoiced:'INVOICED' };
+    const statuses = (statusMap[step]||'').split(',');
+    const data = allOrders.filter(o=>statuses.includes(o.status)).map(o=>({
+      number: o.number, customer: o.customers?.name||'—', type: o.type||'—',
+      tech: o.technicians?.name||'Não atribuído', date: o.scheduled_date||o.created_at?.split('T')[0]||'—',
+    }));
+    const titles = { open:'OS Abertas', scheduled:'OS Agendadas', progress:'OS em Andamento', completed:'OS Concluídas', invoiced:'OS Faturadas' };
+    setPipelineModal({ title: titles[step]||step, data, cols:['Nº OS','Cliente','Tipo','Técnico','Data'], row:r=>[r.number,r.customer,r.type,r.tech,r.date] });
   };
 
   const RevExpChart = ({ data }) => {
@@ -789,15 +842,15 @@ const DashboardPage = ({ setPage, taxRegime='REAL' }) => {
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-        <KPI title="Receita"       value={fmt(d.revenue)} sub={d.label} icon="financial" color="green"  trend={d.trendRevenue}          trendLabel={d.sub}/>
-        <KPI title="Despesas"      value={fmt(d.expense)} sub={d.label} icon="financial" color="red"    trend={-Math.abs(d.trendExpense)} trendLabel={d.sub}/>
-        <KPI title="Lucro Líquido" value={fmt(d.profit)}  sub={`Margem: ${d.margin}%`}  icon="financial" color="blue" trend={d.trendProfit} trendLabel={d.sub}/>
+        <KPI title="Receita Recebida"  value={fmt(stats.receivedRevenue)} sub={`+ ${fmt(stats.pendingRevenue)} pendente`} icon="financial" color="green"/>
+        <KPI title="Despesas Pagas"    value={fmt(stats.paidExpense)}     sub={`+ ${fmt(stats.pendingExpense)} pendente`} icon="financial" color="red"/>
+        <KPI title="Resultado"         value={fmt(stats.receivedRevenue - stats.paidExpense)} sub={stats.receivedRevenue>0?`Margem: ${((1-(stats.paidExpense/stats.receivedRevenue))*100).toFixed(1)}%`:'—'} icon="financial" color="blue"/>
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-        <KPI title="OS Abertas"    value={String(d.openOS)}      sub={d.openOS>5?`${Math.floor(d.openOS*0.3)} urgentes`:'sem urgentes'} icon="orders" color="orange"/>
-        <KPI title="OS Concluídas" value={String(d.completedOS)} sub={d.label} icon="orders" color="green" trend={13.3} trendLabel={d.sub}/>
-        <KPI title="Estoque Crítico" value={`${d.criticalStock} itens`} sub="Reposição necessária" icon="inventory" color="red"/>
+        <KPI title="OS Abertas"       value={String(stats.openOrders)}   sub={`${stats.invoicedOrders} faturadas`} icon="orders" color="orange"/>
+        <KPI title="OS Concluídas"    value={String(stats.completedOrders)} sub={`${stats.activeContracts} contratos ativos`} icon="orders" color="green"/>
+        <KPI title="Clientes Ativos"  value={String(stats.totalCustomers)} sub={stats.lowStockItems>0?`${stats.lowStockItems} itens em falta no estoque`:'estoque OK'} icon="customers" color={stats.lowStockItems>0?'red':'blue'}/>
       </div>
 
       {/* Pipeline */}
@@ -812,31 +865,36 @@ const DashboardPage = ({ setPage, taxRegime='REAL' }) => {
             {(pipelineFrom||pipelineTo)&&<button onClick={()=>{setPipelineFrom('');setPipelineTo('');}} className="text-xs text-gray-400 hover:text-red-500 font-bold">✕</button>}
           </div>
         </div>
-        <div className="grid grid-cols-5 divide-x divide-gray-100">
-          {[
-            { key:'realizadas', label:'Realizadas',        count:MOCK_PIPELINE.realizadas.length, value:MOCK_PIPELINE.realizadas.reduce((s,r)=>s+r.value,0), icon:'🔧', color:'text-gray-600',   bg:'bg-gray-100',  bar:'bg-gray-400',   sub:'concluídas no campo' },
-            { key:'enviadas',   label:'Env. p/ Aprovação', count:MOCK_PIPELINE.enviadas.length,   value:MOCK_PIPELINE.enviadas.reduce((s,r)=>s+r.value,0),   icon:'📋', color:'text-blue-600',   bg:'bg-blue-50',   bar:'bg-blue-400',   sub:'aguardando retorno' },
-            { key:'aprovadas',  label:'Aprovadas',         count:MOCK_PIPELINE.aprovadas.length,  value:MOCK_PIPELINE.aprovadas.reduce((s,r)=>s+r.value,0),  icon:'✅', color:'text-indigo-600', bg:'bg-indigo-50', bar:'bg-indigo-400', sub:'cliente aprovou' },
-            { key:'nf',         label:'NF Emitida',        count:MOCK_PIPELINE.nf.length,         value:MOCK_PIPELINE.nf.reduce((s,r)=>s+r.value,0),         icon:'🧾', color:'text-purple-600', bg:'bg-purple-50', bar:'bg-purple-400', sub:'nota fiscal gerada' },
-            { key:'pagas',      label:'Pagas',             count:MOCK_PIPELINE.pagas.length,      value:MOCK_PIPELINE.pagas.reduce((s,r)=>s+r.value,0),      icon:'💰', color:'text-green-600',  bg:'bg-green-50',  bar:'bg-green-500',  sub:'recebimento confirmado' },
-          ].map((s,i)=>{
-            const pct=Math.round((s.count/MOCK_PIPELINE.realizadas.length)*100);
-            return (
-              <button key={i} onClick={()=>openPipeline(s.key)} className="p-5 text-left hover:bg-gray-50 transition-colors group">
-                <div className="flex items-start justify-between mb-3">
-                  <div className={`${s.bg} ${s.color} w-9 h-9 rounded-lg flex items-center justify-center text-base`}>{s.icon}</div>
-                  {i<4&&<span className="text-gray-200 text-xl mt-0.5">›</span>}
-                </div>
-                <p className="text-2xl font-bold text-gray-900">{s.count}</p>
-                <p className="text-xs font-semibold text-gray-600 mt-0.5">{s.label}</p>
-                <p className="text-sm font-semibold text-gray-700 mt-1">{fmt(s.value)}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{s.sub}</p>
-                <div className="mt-3 w-full bg-gray-100 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${s.bar}`} style={{width:`${pct}%`}}/></div>
-                <p className="text-xs text-gray-400 mt-1 group-hover:text-blue-500">{pct}% das realizadas →</p>
-              </button>
-            );
-          })}
-        </div>
+        {(()=>{
+          const stages = [
+            { key:'open',      label:'Abertas',       count:allOrders.filter(o=>o.status==='OPEN').length,                                        icon:'📋', color:'text-gray-600',   bg:'bg-gray-100',  bar:'bg-gray-400',   sub:'aguardando atribuição' },
+            { key:'scheduled', label:'Agendadas',     count:allOrders.filter(o=>o.status==='SCHEDULED').length,                                    icon:'📅', color:'text-blue-600',   bg:'bg-blue-50',   bar:'bg-blue-400',   sub:'técnico designado' },
+            { key:'progress',  label:'Em Andamento',  count:allOrders.filter(o=>['IN_TRANSIT','IN_PROGRESS'].includes(o.status)).length,           icon:'🔧', color:'text-orange-600', bg:'bg-orange-50', bar:'bg-orange-400', sub:'em campo / execução' },
+            { key:'completed', label:'Concluídas',    count:allOrders.filter(o=>o.status==='COMPLETED').length,                                    icon:'✅', color:'text-green-600',  bg:'bg-green-50',  bar:'bg-green-500',  sub:'aguardando faturamento' },
+            { key:'invoiced',  label:'Faturadas',     count:allOrders.filter(o=>o.status==='INVOICED').length,                                     icon:'🧾', color:'text-purple-600', bg:'bg-purple-50', bar:'bg-purple-400', sub:'nota fiscal emitida' },
+          ];
+          const total = allOrders.length || 1;
+          return (
+            <div className="grid grid-cols-5 divide-x divide-gray-100">
+              {stages.map((s,i)=>{
+                const pct = Math.round((s.count/total)*100);
+                return (
+                  <button key={i} onClick={()=>openPipeline(s.key)} className="p-5 text-left hover:bg-gray-50 transition-colors group">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className={`${s.bg} ${s.color} w-9 h-9 rounded-lg flex items-center justify-center text-base`}>{s.icon}</div>
+                      {i<4&&<span className="text-gray-200 text-xl mt-0.5">›</span>}
+                    </div>
+                    <p className="text-2xl font-bold text-gray-900">{s.count}</p>
+                    <p className="text-xs font-semibold text-gray-600 mt-0.5">{s.label}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{s.sub}</p>
+                    <div className="mt-3 w-full bg-gray-100 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${s.bar}`} style={{width:`${pct}%`}}/></div>
+                    <p className="text-xs text-gray-400 mt-1 group-hover:text-blue-500">{pct}% do total →</p>
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
 
       <Modal open={!!pipelineModal} onClose={()=>setPipelineModal(null)} title={pipelineModal?.title||''} size="xl">
@@ -844,7 +902,7 @@ const DashboardPage = ({ setPage, taxRegime='REAL' }) => {
           <div>
             <div className="flex items-center justify-between mb-4">
               <p className="text-sm text-gray-500">{pipelineModal.data.length} ordens de serviço</p>
-              <p className="text-sm font-semibold text-gray-800">Total: {fmt(pipelineModal.data.reduce((s,r)=>s+r.value,0))}</p>
+              {pipelineModal.data.length===0&&<p className="text-sm text-gray-400 italic">Nenhuma OS nesta etapa</p>}
             </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50"><tr>{pipelineModal.cols.map(c=><th key={c} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">{c}</th>)}</tr></thead>
@@ -920,19 +978,24 @@ const DashboardPage = ({ setPage, taxRegime='REAL' }) => {
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-gray-800">Alertas Ativos</h3>
-          <span className="bg-red-100 text-red-700 text-xs font-bold px-2 py-0.5 rounded-full">{MOCK_ALERTS.length}</span>
+          {alerts.length>0
+            ? <span className="bg-red-100 text-red-700 text-xs font-bold px-2 py-0.5 rounded-full">{alerts.length}</span>
+            : <span className="bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">0</span>}
         </div>
-        {MOCK_ALERTS.map(a=>{
-          const sev={HIGH:['border-l-red-500','bg-red-50','🔴'],MEDIUM:['border-l-amber-400','bg-amber-50','🟡'],LOW:['border-l-blue-400','bg-blue-50','🔵']}[a.severity];
-          const navMap2={OVERDUE_RECEIVABLE:'financial',BATTERY_END_OF_LIFE:'inventory',LOW_STOCK:'inventory',OVERDUE_ORDER:'orders',CONTRACT_EXPIRING:'contracts'};
-          return (
-            <div key={a.id} className={`flex items-start gap-3 px-5 py-3 border-l-4 ${sev[0]} ${sev[1]} border-b border-gray-50 last:border-b-0`}>
-              <span className="text-sm mt-0.5">{sev[2]}</span>
-              <div className="flex-1"><p className="text-sm font-medium text-gray-800">{a.title}</p><p className="text-xs text-gray-500 mt-0.5">{a.message}</p></div>
-              <button onClick={()=>setPage(navMap2[a.type]||'dashboard')} className="text-xs text-blue-600 hover:underline shrink-0 font-medium whitespace-nowrap">Ver →</button>
-            </div>
-          );
-        })}
+        {alerts.length===0
+          ? <p className="px-5 py-6 text-sm text-gray-400 text-center">Nenhum alerta pendente</p>
+          : alerts.map(a=>{
+              const sev={HIGH:['border-l-red-500','bg-red-50','🔴'],MEDIUM:['border-l-amber-400','bg-amber-50','🟡'],LOW:['border-l-blue-400','bg-blue-50','🔵']}[a.severity]||['border-l-gray-300','bg-gray-50','⚪'];
+              const navMap2={OVERDUE_RECEIVABLE:'financial',OVERDUE_PAYABLE:'financial',LOW_STOCK:'inventory',OVERDUE_ORDER:'orders',CONTRACT_EXPIRING:'contracts'};
+              return (
+                <div key={a.id} className={`flex items-start gap-3 px-5 py-3 border-l-4 ${sev[0]} ${sev[1]} border-b border-gray-50 last:border-b-0`}>
+                  <span className="text-sm mt-0.5">{sev[2]}</span>
+                  <div className="flex-1"><p className="text-sm font-medium text-gray-800">{a.title}</p><p className="text-xs text-gray-500 mt-0.5">{a.message}</p></div>
+                  <button onClick={()=>setPage(navMap2[a.type]||'dashboard')} className="text-xs text-blue-600 hover:underline shrink-0 font-medium whitespace-nowrap">Ver →</button>
+                </div>
+              );
+            })
+        }
       </div>
       {/* Card Regime Tributário */}
       {(()=>{ const tr=TAX_REGIMES[taxRegime]; return (
@@ -1006,7 +1069,7 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
     if (result.success) {
       setOrders(result.data?.data || result.data || []);
     } else {
-      setOrders(OS_INIT);
+      setOrders([]);
     }
     setLoading(false);
   };
@@ -1065,7 +1128,8 @@ const OrdersPage = ({ taxRegime='REAL' }) => {
   };
 
   const createOS = async () => {
-    if (!newOS.customer_id||!newOS.scheduled_date) return;
+    if (!newOS.customer_id) { setToast('Selecione um cliente'); return; }
+    if (!newOS.scheduled_date) { setToast('Data agendada é obrigatória'); return; }
     const result = await api.createOrder({
       customer_id: newOS.customer_id,
       type: newOS.type,
@@ -1389,7 +1453,7 @@ const CustomersPage = ({ setPage }) => {
     if (result.success) {
       setCustomers(result.data?.data || result.data || []);
     } else {
-      setCustomers(CUSTOMERS_INIT);
+      setCustomers([]);
     }
     setLoading(false);
   };
@@ -1400,7 +1464,8 @@ const CustomersPage = ({ setPage }) => {
   );
 
   const create = async () => {
-    if (!form.name||!form.doc) return;
+    if (!form.name) { setToast('Nome é obrigatório'); return; }
+    if (!form.doc) { setToast('CPF/CNPJ é obrigatório'); return; }
 
     const result = await api.createCustomer(form);
     if (result.success) {
@@ -1563,7 +1628,9 @@ const ContractsPage = ({ taxRegime='REAL' }) => {
   const expiring = contracts.filter(c=>c.status==='ACTIVE').length;
 
   const create = async () => {
-    if (!form.customer_id||!form.value||!form.start_date||!form.end_date) return;
+    if (!form.customer_id) { setToast('Selecione um cliente'); return; }
+    if (!form.value || isNaN(parseFloat(form.value)) || parseFloat(form.value) <= 0) { setToast('Informe um valor válido'); return; }
+    if (!form.start_date||!form.end_date) { setToast('Datas de início e fim são obrigatórias'); return; }
     const result = await api.createContract({
       customer_id: form.customer_id,
       type: form.type,
@@ -1668,10 +1735,24 @@ const ContractsPage = ({ taxRegime='REAL' }) => {
             <div className="flex gap-2 pt-2 border-t border-gray-100">
               {sel.status==='ACTIVE'&&<button onClick={()=>suspend(sel.id)} className="flex-1 py-2.5 border border-amber-300 text-amber-700 rounded-lg text-sm hover:bg-amber-50">Suspender</button>}
               {sel.status==='SUSPENDED'&&<button onClick={()=>activate(sel.id)} className="flex-1 py-2.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">Reativar</button>}
-              <button onClick={()=>{
-                const seq=String(contracts.length+11).padStart(3,'0');
-                const n={...sel,id:Date.now(),number:`CTR-2026-${seq}`,status:'ACTIVE'};
-                setContracts(p=>[n,...p]); setSelected(null); setToast(`Contrato renovado: ${n.number}`);
+              <button onClick={async()=>{
+                const addYear = d => d ? new Date(new Date(d).setFullYear(new Date(d).getFullYear()+1)).toISOString().split('T')[0] : null;
+                const result = await api.createContract({
+                  customer_id: sel.customer_id,
+                  type: sel.type,
+                  value: sel.value,
+                  start_date: addYear(sel.start_date||sel.start),
+                  end_date: addYear(sel.end_date||sel.end),
+                  sla_hours: sel.sla_hours||sel.sla,
+                  status: 'ACTIVE'
+                });
+                if (result.success) {
+                  setContracts(p=>[result.data,...p]);
+                  setSelected(null);
+                  setToast(`Contrato renovado: ${result.data.number}`);
+                } else {
+                  setToast(result.error||'Erro ao renovar contrato');
+                }
               }} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Renovar Contrato</button>
               <button onClick={()=>setSelected(null)} className="px-4 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Fechar</button>
             </div>
@@ -1955,7 +2036,9 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
     }
   };
   const addTx = async () => {
-    if (!newTx.description||!newTx.amount||!newTx.due_date) return;
+    if (!newTx.description) { setToast('Descrição é obrigatória'); return; }
+    if (!newTx.amount || parseFloat(newTx.amount) <= 0) { setToast('Informe um valor válido'); return; }
+    if (!newTx.due_date) { setToast('Data de vencimento é obrigatória'); return; }
     const result = await api.createTransaction({
       type: newTx.type,
       description: newTx.description,
@@ -2656,7 +2739,7 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
                   return (
                     <div className="space-y-4">
                       <div className="flex items-center gap-4 pb-3 border-b border-gray-100">
-                        <div className="w-12 h-12 rounded-full bg-cyan-600 flex items-center justify-center text-white text-lg font-bold">{emp.name[0]}</div>
+                        <div className="w-12 h-12 rounded-full bg-cyan-600 flex items-center justify-center text-white text-lg font-bold">{(emp.name||'?')[0]}</div>
                         <div>
                           <p className="font-bold text-gray-800">{emp.name}</p>
                           <p className="text-xs text-gray-400">{emp.role} · CPF {emp.cpf} · Admissão: {fmtDate(emp.admDate)}</p>
@@ -3183,41 +3266,81 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
 const InventoryPage = () => {
   const [q, setQ]               = useState('');
   const [belowMin, setBelowMin] = useState(false);
-  const [inventory, setInventory] = useState(INVENTORY_INIT);
+  const [inventory, setInventory] = useState([]);
   const [selected, setSelected] = useState(null);
   const [newModal, setNewModal] = useState(false);
-  const [adjustModal, setAdjustModal] = useState(null); // item to adjust
+  const [adjustModal, setAdjustModal] = useState(null);
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustDir, setAdjustDir] = useState('+');
   const [adjustNote, setAdjustNote] = useState('');
   const [toast, setToast] = useState(null);
   const [form, setForm] = useState({ sku:'', name:'', cat:'Equipamentos', qty:'', min:'', cost:'', loc:'' });
   const [invTab, setInvTab] = useState('items');
-  const [products, setProducts] = useState(PRODUCTS_INIT);
+  const [products, setProducts] = useState([]);
   const [prodForm, setProdForm] = useState({code:'',name:'',cat:'Equipamentos',unit:'un',costRef:'',desc:''});
   const [newProdModal, setNewProdModal] = useState(false);
 
+  const normalizeProduct = p => ({
+    ...p,
+    cat: p.category || p.cat || 'Outros',
+    qty: p.quantity ?? p.qty ?? 0,
+    min: p.min_quantity ?? p.min ?? 0,
+    cost: p.unit_cost !== undefined ? Math.round(p.unit_cost * 100) : (p.cost || 0),
+    loc: p.description || p.loc || '',
+    belowMin: (p.quantity ?? p.qty ?? 0) < (p.min_quantity ?? p.min ?? 1),
+    code: p.sku || p.code || '',
+    unit: p.unit || 'un',
+    costRef: p.unit_cost !== undefined ? Math.round(p.unit_cost * 100) : (p.costRef || 0),
+    desc: p.description || p.desc || ''
+  });
+
+  useEffect(() => {
+    api.getProducts().then(r => {
+      if (r.success) {
+        const normalized = (r.data?.data || r.data || []).map(normalizeProduct);
+        setInventory(normalized);
+        setProducts(normalized);
+      }
+    });
+  }, []);
+
   const items = inventory.filter(i=>(!q||i.name.toLowerCase().includes(q.toLowerCase())||i.sku.toLowerCase().includes(q.toLowerCase()))&&(!belowMin||i.belowMin));
 
-  const createItem = () => {
-    if (!form.name||!form.sku) return;
-    const qty=parseInt(form.qty)||0, min=parseInt(form.min)||0;
-    const item={id:Date.now(),sku:form.sku,name:form.name,cat:form.cat,qty,min,cost:Math.round(parseFloat(form.cost||0)*100),loc:form.loc,belowMin:qty<min};
-    setInventory(p=>[item,...p]);
-    setNewModal(false);
-    setForm({sku:'',name:'',cat:'Equipamentos',qty:'',min:'',cost:'',loc:''});
-    setToast(`Item ${form.name} cadastrado!`);
+  const createItem = async () => {
+    if (!form.name || !form.sku) { setToast('Nome e SKU são obrigatórios'); return; }
+    const result = await api.createProduct({
+      sku: form.sku, name: form.name, category: form.cat,
+      quantity: parseInt(form.qty) || 0,
+      unit_cost: parseFloat(form.cost || 0),
+      description: form.loc
+    });
+    if (result.success) {
+      const normalized = normalizeProduct(result.data);
+      setInventory(p => [normalized, ...p]);
+      setProducts(p => [normalized, ...p]);
+      setNewModal(false);
+      setForm({ sku:'', name:'', cat:'Equipamentos', qty:'', min:'', cost:'', loc:'' });
+      setToast(`Item ${form.name} cadastrado!`);
+    } else {
+      setToast(result.error || 'Erro ao cadastrar item');
+    }
   };
 
 
-  const doAdjust = () => {
-    const qty=parseInt(adjustQty)||0;
-    setInventory(p=>p.map(i=>{
-      if(i.id!==adjustModal.id) return i;
-      const newQty = adjustDir==='+' ? i.qty+qty : Math.max(0,i.qty-qty);
-      return {...i,qty:newQty,belowMin:newQty<i.min};
-    }));
-    setToast(`Estoque de ${adjustModal.name} ajustado!`);
+  const doAdjust = async () => {
+    const target = adjustModal || selected;
+    if (!target) return;
+    const qty = parseInt(adjustQty) || 0;
+    const curQty = inventory.find(i => i.id === target.id)?.qty ?? target.qty ?? 0;
+    const newQty = adjustDir === '+' ? (curQty + qty) : Math.max(0, curQty - qty);
+    const result = await api.updateProduct(target.id, { quantity: newQty });
+    if (result.success) {
+      const updater = i => i.id !== target.id ? i : { ...i, qty: newQty, quantity: newQty, belowMin: newQty < i.min };
+      setInventory(p => p.map(updater));
+      setToast(`Estoque de ${target.name} ajustado!`);
+    } else {
+      setToast(result.error || 'Erro ao ajustar estoque');
+    }
     setAdjustModal(null); setAdjustQty(''); setAdjustDir('+'); setAdjustNote('');
   };
 
@@ -3346,7 +3469,7 @@ const InventoryPage = () => {
                     <td className="px-4 py-3 text-xs text-gray-500">{p.unit}</td>
                     <td className="px-4 py-3 text-gray-700">{fmt(p.costRef)}</td>
                     <td className="px-4 py-3 text-xs text-gray-400 max-w-xs truncate">{p.desc}</td>
-                    <td className="px-4 py-3"><button onClick={()=>setProducts(prev=>prev.filter(x=>x.id!==p.id))} className="text-xs text-red-400 hover:text-red-600">Remover</button></td>
+                    <td className="px-4 py-3"><button onClick={async()=>{ const r=await api.deleteProduct(p.id); if(r.success){setProducts(prev=>prev.filter(x=>x.id!==p.id));setInventory(prev=>prev.filter(x=>x.id!==p.id));} }} className="text-xs text-red-400 hover:text-red-600">Remover</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -3371,7 +3494,12 @@ const InventoryPage = () => {
               </div>
               <div className="flex gap-2 pt-2">
                 <button onClick={()=>setNewProdModal(false)} className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
-                <button onClick={()=>{if(!prodForm.code.trim()||!prodForm.name.trim())return;setProducts(p=>[...p,{id:Date.now(),...prodForm,costRef:Math.round(parseFloat(prodForm.costRef||0)*100)}]);setNewProdModal(false);setProdForm({code:'',name:'',cat:'Equipamentos',unit:'un',costRef:'',desc:''});setToast('Produto cadastrado!');}} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Cadastrar</button>
+                <button onClick={async()=>{
+                  if(!prodForm.code.trim()||!prodForm.name.trim())return;
+                  const r=await api.createProduct({sku:prodForm.code,name:prodForm.name,category:prodForm.cat,unit_cost:parseFloat(prodForm.costRef||0),description:prodForm.desc});
+                  if(r.success){const n=normalizeProduct(r.data);setProducts(p=>[...p,n]);setInventory(p=>[...p,n]);setNewProdModal(false);setProdForm({code:'',name:'',cat:'Equipamentos',unit:'un',costRef:'',desc:''});setToast('Produto cadastrado!');}
+                  else setToast(r.error||'Erro ao cadastrar produto');
+                }} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Cadastrar</button>
               </div>
             </div>
           </Modal>
@@ -3384,25 +3512,49 @@ const InventoryPage = () => {
 // ─── TECHNICIANS ──────────────────────────────────────────────────────────────
 
 const TechniciansPage = () => {
-  const [technicians, setTechnicians] = useState(TECHNICIANS_INIT);
+  const [technicians, setTechnicians] = useState([]);
   const [selected, setSelected]       = useState(null);
   const [newModal, setNewModal]       = useState(false);
   const [toast, setToast]             = useState(null);
   const [form, setForm]               = useState({ name:'', phone:'', email:'', specs:'', status:'ACTIVE' });
 
-  const create = () => {
-    if (!form.name||!form.phone) return;
-    const t={ id:Date.now(), name:form.name, phone:form.phone, email:form.email, specs:form.specs.split(',').map(s=>s.trim()).filter(Boolean), status:form.status, orders:0, avgMin:0, rework:0 };
-    setTechnicians(p=>[t,...p]);
-    setNewModal(false);
-    setForm({name:'',phone:'',email:'',specs:'',status:'ACTIVE'});
-    setToast(`Técnico ${form.name} cadastrado!`);
+  useEffect(() => { loadTechnicians(); }, []);
+  const loadTechnicians = async () => {
+    const r = await api.getTechnicians();
+    if (r.success) setTechnicians(r.data?.data || r.data || []);
+    else setTechnicians([]);
   };
 
-  const toggleStatus = id => {
-    setTechnicians(p=>p.map(t=>t.id===id?{...t,status:t.status==='ACTIVE'?'ON_LEAVE':'ACTIVE'}:t));
-    setSelected(null);
-    setToast('Status do técnico atualizado!');
+  const create = async () => {
+    if (!form.name || !form.phone) { setToast('Nome e telefone são obrigatórios'); return; }
+    const result = await api.createTechnician({
+      name: form.name,
+      phone: form.phone,
+      email: form.email || null,
+      specializations: form.specs ? form.specs.split(',').map(s=>s.trim()).filter(Boolean) : [],
+      status: form.status
+    });
+    if (result.success) {
+      setTechnicians(p=>[result.data,...p]);
+      setNewModal(false);
+      setForm({name:'',phone:'',email:'',specs:'',status:'ACTIVE'});
+      setToast(`Técnico ${form.name} cadastrado!`);
+    } else {
+      setToast(`Erro: ${result.error}`);
+    }
+  };
+
+  const toggleStatus = async id => {
+    const t = technicians.find(x=>x.id===id);
+    const newStatus = t?.status==='ACTIVE' ? 'ON_LEAVE' : 'ACTIVE';
+    const result = await api.updateTechnician(id, { status: newStatus });
+    if (result.success) {
+      setTechnicians(p=>p.map(x=>x.id===id?{...x,status:newStatus}:x));
+      setSelected(null);
+      setToast('Status do técnico atualizado!');
+    } else {
+      setToast(`Erro: ${result.error}`);
+    }
   };
 
   const sel = selected ? technicians.find(t=>t.id===selected.id)||selected : null;
@@ -3421,12 +3573,12 @@ const TechniciansPage = () => {
           <div key={t.id} onClick={()=>setSelected(t)} className={`bg-white rounded-xl border border-gray-200 shadow-sm p-5 cursor-pointer hover:shadow-md transition-shadow ${t.status!=='ACTIVE'?'opacity-70':''}`}>
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white font-bold text-lg shrink-0">{t.name[0]}</div>
+                <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white font-bold text-lg shrink-0">{(t.name||'?')[0]}</div>
                 <div>
                   <h3 className="font-semibold text-gray-800">{t.name}</h3>
                   <p className="text-sm text-gray-500">{t.phone}</p>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {t.specs.map(s=><span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-600 text-xs rounded border border-blue-100">{s}</span>)}
+                    {(t.specializations||t.specs||[]).map(s=><span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-600 text-xs rounded border border-blue-100">{s}</span>)}
                   </div>
                 </div>
               </div>
@@ -3434,9 +3586,9 @@ const TechniciansPage = () => {
             </div>
             {t.status==='ACTIVE'&&(
               <div className="grid grid-cols-3 gap-2 mt-4 pt-4 border-t border-gray-100">
-                <div className="text-center"><p className="text-xl font-bold text-gray-800">{t.orders}</p><p className="text-xs text-gray-400">OS / mês</p></div>
-                <div className="text-center"><p className="text-xl font-bold text-gray-800">{t.avgMin}<span className="text-sm font-normal text-gray-400">min</span></p><p className="text-xs text-gray-400">Tempo médio</p></div>
-                <div className="text-center"><p className={`text-xl font-bold ${t.rework>5?'text-red-600':'text-green-600'}`}>{t.rework}%</p><p className="text-xs text-gray-400">Retrabalho</p></div>
+                <div className="text-center"><p className="text-xl font-bold text-gray-800">{t.orders||0}</p><p className="text-xs text-gray-400">OS / mês</p></div>
+                <div className="text-center"><p className="text-xl font-bold text-gray-800">{t.avg_time||t.avgMin||'—'}<span className="text-sm font-normal text-gray-400">min</span></p><p className="text-xs text-gray-400">Tempo médio</p></div>
+                <div className="text-center"><p className={`text-xl font-bold ${(t.rework_percentage||t.rework||0)>5?'text-red-600':'text-green-600'}`}>{t.rework_percentage||t.rework||0}%</p><p className="text-xs text-gray-400">Retrabalho</p></div>
               </div>
             )}
           </div>
@@ -3448,7 +3600,7 @@ const TechniciansPage = () => {
         {sel&&(
           <div className="space-y-5">
             <div className="flex items-center gap-3">
-              <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white font-bold text-2xl">{sel.name[0]}</div>
+              <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white font-bold text-2xl">{(sel.name||'?')[0]}</div>
               <div><h3 className="font-semibold text-gray-800 text-lg">{sel.name}</h3><Badge status={sel.status}/></div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -3457,13 +3609,13 @@ const TechniciansPage = () => {
             </div>
             <div>
               <p className="text-xs text-gray-400 mb-2">Especializações</p>
-              <div className="flex flex-wrap gap-2">{sel.specs.map(s=><span key={s} className="px-2.5 py-1 bg-blue-50 text-blue-600 text-sm rounded-lg border border-blue-100">{s}</span>)}</div>
+              <div className="flex flex-wrap gap-2">{(sel.specializations||sel.specs||[]).map(s=><span key={s} className="px-2.5 py-1 bg-blue-50 text-blue-600 text-sm rounded-lg border border-blue-100">{s}</span>)}</div>
             </div>
             {sel.status==='ACTIVE'&&(
               <div className="bg-gray-50 rounded-xl p-4 grid grid-cols-3 gap-4 text-center">
-                <div><p className="text-2xl font-bold text-gray-800">{sel.orders}</p><p className="text-xs text-gray-400 mt-0.5">OS este mês</p></div>
-                <div><p className="text-2xl font-bold text-gray-800">{sel.avgMin}<span className="text-sm font-normal text-gray-400">min</span></p><p className="text-xs text-gray-400 mt-0.5">Tempo médio</p></div>
-                <div><p className={`text-2xl font-bold ${sel.rework>5?'text-red-600':'text-green-600'}`}>{sel.rework}%</p><p className="text-xs text-gray-400 mt-0.5">Retrabalho</p></div>
+                <div><p className="text-2xl font-bold text-gray-800">{sel.orders||0}</p><p className="text-xs text-gray-400 mt-0.5">OS este mês</p></div>
+                <div><p className="text-2xl font-bold text-gray-800">{sel.avg_time||sel.avgMin||'—'}<span className="text-sm font-normal text-gray-400">min</span></p><p className="text-xs text-gray-400 mt-0.5">Tempo médio</p></div>
+                <div><p className={`text-2xl font-bold ${(sel.rework_percentage||sel.rework||0)>5?'text-red-600':'text-green-600'}`}>{sel.rework_percentage||sel.rework||0}%</p><p className="text-xs text-gray-400 mt-0.5">Retrabalho</p></div>
               </div>
             )}
             <div className="flex gap-2 pt-2 border-t border-gray-100">
@@ -3503,37 +3655,72 @@ const TechniciansPage = () => {
 // ─── FLEET ────────────────────────────────────────────────────────────────────
 
 const FleetPage = () => {
-  const [vehicles, setVehicles] = useState(VEHICLES_INIT);
-  const [selected, setSelected] = useState(null);
-  const [newModal, setNewModal] = useState(false);
-  const [toast, setToast]       = useState(null);
-  const [form, setForm]         = useState({ plate:'', model:'', year:'', tech:'' });
-  const [odoEdit, setOdoEdit]   = useState('');
-  const [maintForm, setMaintForm] = useState({date:'',type:'Preventiva',desc:'',km:'',cost:'',tech:''});
+  const [vehicles, setVehicles]     = useState([]);
+  const [technicians, setTechs]     = useState([]);
+  const [maintenance, setMaint]     = useState([]);
+  const [selected, setSelected]     = useState(null);
+  const [newModal, setNewModal]     = useState(false);
+  const [toast, setToast]           = useState(null);
+  const [form, setForm]             = useState({ plate:'', model:'', year:'', assigned_technician_id:'' });
+  const [odoEdit, setOdoEdit]       = useState('');
+  const [maintForm, setMaintForm]   = useState({date:'',type:'Preventiva',desc:'',km:'',cost:'',tech:''});
 
-  const TECHS = TECHNICIANS_INIT.filter(t=>t.status==='ACTIVE').map(t=>t.name);
+  useEffect(() => {
+    api.getVehicles().then(r => setVehicles(r.data?.data || r.data || []));
+    api.getTechnicians().then(r => setTechs(r.data?.data || r.data || []));
+  }, []);
 
-  const create = () => {
-    if (!form.plate||!form.model) return;
-    const v={ id:Date.now(), plate:form.plate.toUpperCase(), model:form.model, year:parseInt(form.year)||new Date().getFullYear(), tech:form.tech||null, status:'AVAILABLE', odometer:0, lastService:'2026-04-04', nextService:'2026-10-04' };
-    setVehicles(p=>[v,...p]);
-    setNewModal(false);
-    setForm({plate:'',model:'',year:'',tech:''});
-    setToast(`Veículo ${v.plate} cadastrado!`);
+  useEffect(() => {
+    if (selected?.id) {
+      api.getVehicleMaintenance(selected.id).then(r => {
+        if (r.success) setMaint(r.data || []);
+      });
+    } else {
+      setMaint([]);
+    }
+  }, [selected?.id]);
+
+  const create = async () => {
+    if (!form.plate || !form.model) { setToast('Placa e modelo são obrigatórios'); return; }
+    const result = await api.createVehicle({
+      plate: form.plate.toUpperCase(),
+      model: form.model,
+      year: parseInt(form.year) || new Date().getFullYear(),
+      assigned_technician_id: form.assigned_technician_id || null,
+      status: 'AVAILABLE'
+    });
+    if (result.success) {
+      setVehicles(p=>[result.data,...p]);
+      setNewModal(false);
+      setForm({plate:'',model:'',year:'',assigned_technician_id:''});
+      setToast(`Veículo ${result.data.plate} cadastrado!`);
+    } else {
+      setToast(`Erro: ${result.error}`);
+    }
   };
 
-  const updateOdo = id => {
-    const km=parseInt(odoEdit)||0;
-    setVehicles(p=>p.map(v=>v.id===id?{...v,odometer:km}:v));
-    setSelected(prev=>prev?{...prev,odometer:km}:null);
-    setOdoEdit('');
-    setToast('Odômetro atualizado!');
+  const updateOdo = async id => {
+    const km = parseInt(odoEdit) || 0;
+    const result = await api.updateVehicle(id, { odometer: km });
+    if (result.success) {
+      setVehicles(p=>p.map(v=>v.id===id?{...v,odometer:km}:v));
+      setSelected(prev=>prev?{...prev,odometer:km}:null);
+      setOdoEdit('');
+      setToast('Odômetro atualizado!');
+    } else {
+      setToast(`Erro: ${result.error}`);
+    }
   };
 
-  const changeStatus = (id, status) => {
-    setVehicles(p=>p.map(v=>v.id===id?{...v,status}:v));
-    setSelected(prev=>prev?{...prev,status}:null);
-    setToast('Status do veículo atualizado!');
+  const changeStatus = async (id, status) => {
+    const result = await api.updateVehicle(id, { status });
+    if (result.success) {
+      setVehicles(p=>p.map(v=>v.id===id?{...v,status}:v));
+      setSelected(prev=>prev?{...prev,status}:null);
+      setToast('Status do veículo atualizado!');
+    } else {
+      setToast(`Erro: ${result.error}`);
+    }
   };
 
   const sel = selected ? vehicles.find(v=>v.id===selected.id)||selected : null;
@@ -3559,10 +3746,10 @@ const FleetPage = () => {
                 <td className="px-4 py-3 font-mono font-bold text-gray-700">{v.plate}</td>
                 <td className="px-4 py-3 text-gray-800">{v.model}</td>
                 <td className="px-4 py-3 text-gray-600">{v.year}</td>
-                <td className="px-4 py-3 text-gray-600">{v.tech||<span className="text-gray-300">—</span>}</td>
+                <td className="px-4 py-3 text-gray-600">{v.technicians?.name||<span className="text-gray-300">—</span>}</td>
                 <td className="px-4 py-3"><Badge status={v.status}/></td>
-                <td className="px-4 py-3 text-gray-700">{v.odometer.toLocaleString('pt-BR')} km</td>
-                <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(v.nextService)}</td>
+                <td className="px-4 py-3 text-gray-700">{(v.odometer||0).toLocaleString('pt-BR')} km</td>
+                <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(v.next_service_date||v.nextService)}</td>
                 <td className="px-4 py-3"><button className="text-xs text-blue-600 hover:underline font-medium">Detalhes →</button></td>
               </tr>
             ))}
@@ -3602,20 +3789,20 @@ const FleetPage = () => {
             <div className="border-t border-gray-100 pt-4">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-sm font-semibold text-gray-700">Histórico de Manutenção</p>
-                <span className="text-xs text-gray-400">{sel.maintenance?.length||0} registro(s)</span>
+                <span className="text-xs text-gray-400">{maintenance.length} registro(s)</span>
               </div>
               <div className="space-y-2 max-h-40 overflow-y-auto mb-3">
-                {(!sel.maintenance||sel.maintenance.length===0)
+                {maintenance.length===0
                   ? <p className="text-xs text-gray-400 text-center py-2">Nenhum registro ainda</p>
-                  : sel.maintenance.map((m,i)=>(
-                      <div key={i} className="bg-gray-50 rounded-lg p-2.5 text-xs">
+                  : maintenance.map(m=>(
+                      <div key={m.id} className="bg-gray-50 rounded-lg p-2.5 text-xs">
                         <div className="flex items-center justify-between mb-0.5">
                           <span className={`font-semibold px-1.5 py-0.5 rounded ${m.type==='Preventiva'?'bg-green-100 text-green-700':'bg-orange-100 text-orange-700'}`}>{m.type}</span>
                           <span className="text-gray-400">{fmtDate(m.date)} · {m.km?.toLocaleString('pt-BR')} km</span>
                         </div>
-                        <p className="text-gray-700 mt-0.5">{m.desc}</p>
+                        <p className="text-gray-700 mt-0.5">{m.description||m.desc}</p>
                         <div className="flex justify-between mt-0.5 text-gray-400">
-                          <span>Técnico: {m.tech}</span>
+                          <span>Técnico: {m.technician_name||m.tech||'—'}</span>
                           <span className="font-medium text-gray-600">{fmt(m.cost)}</span>
                         </div>
                       </div>
@@ -3640,15 +3827,25 @@ const FleetPage = () => {
                 <div><label className="text-xs text-gray-400">Técnico</label>
                   <select value={maintForm.tech} onChange={e=>setMaintForm(p=>({...p,tech:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none bg-white">
                     <option value="">Selecionar...</option>
-                    {TECHS.map(t=><option key={t} value={t}>{t}</option>)}
+                    {technicians.map(t=><option key={t.id} value={t.name}>{t.name}</option>)}
                   </select></div>
-                <button onClick={()=>{
-                  if(!maintForm.date||!maintForm.desc) return;
-                  const entry={id:Date.now(),date:maintForm.date,type:maintForm.type,desc:maintForm.desc,km:parseInt(maintForm.km)||sel.odometer,cost:Math.round(parseFloat(maintForm.cost||0)*100),tech:maintForm.tech||'—'};
-                  setVehicles(prev=>prev.map(v=>v.id===sel.id?{...v,maintenance:[entry,...(v.maintenance||[])]}:v));
-                  setSelected(prev=>prev?{...prev,maintenance:[entry,...(prev.maintenance||[])]}:null);
-                  setMaintForm({date:'',type:'Preventiva',desc:'',km:'',cost:'',tech:''});
-                  setToast('Manutenção registrada!');
+                <button onClick={async ()=>{
+                  if(!maintForm.date||!maintForm.desc) { setToast('Data e descrição são obrigatórios'); return; }
+                  const result = await api.createVehicleMaintenance(sel.id, {
+                    date: maintForm.date,
+                    type: maintForm.type,
+                    description: maintForm.desc,
+                    km: parseInt(maintForm.km)||sel.odometer||null,
+                    cost: Math.round(parseFloat(maintForm.cost||0)*100),
+                    technician_name: maintForm.tech||null
+                  });
+                  if (result.success) {
+                    setMaint(prev=>[result.data,...prev]);
+                    setMaintForm({date:'',type:'Preventiva',desc:'',km:'',cost:'',tech:''});
+                    setToast('Manutenção registrada!');
+                  } else {
+                    setToast(`Erro: ${result.error}`);
+                  }
                 }} className="w-full py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700">Registrar</button>
               </div>
             </div>
@@ -3672,9 +3869,9 @@ const FleetPage = () => {
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/></div>
           ))}
           <div><label className="block text-sm font-medium text-gray-700 mb-1">Responsável</label>
-            <select value={form.tech} onChange={e=>setForm(p=>({...p,tech:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none">
+            <select value={form.assigned_technician_id} onChange={e=>setForm(p=>({...p,assigned_technician_id:e.target.value}))} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none">
               <option value="">Nenhum</option>
-              {TECHS.map(t=><option key={t} value={t}>{t}</option>)}
+              {technicians.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
             </select></div>
           <div className="flex gap-2 pt-2">
             <button onClick={()=>setNewModal(false)} className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
@@ -3692,26 +3889,47 @@ const FleetPage = () => {
 const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, expenseCats=[], setExpenseCats, bankAccounts=[], setBankAccounts, payMethods=[], setPayMethods }) => {
   const [tab, setTab] = useState('company');
   const [company, setCompany] = useState({ name:'Opticom Telecom', cnpj:'04.176.164/0001-25', email:'contato@opticom.com.br', phone:'(17) 3212-5000', address:'Rua das Telecomunicações, 100', city:'São José do Rio Preto — SP', cep:'15000-000', plan:'PROFESSIONAL' });
-  const [users, setUsers] = useState(SYSTEM_USERS_INIT);
+  const [users, setUsers] = useState([]);
   const [notif, setNotif] = useState({ email:true, sms:false, lowStock:true, osOverdue:true, contractExpiring:true, payments:true });
   const [sla, setSla] = useState({ urgent:2, high:8, medium:24, low:72 });
   const [toast, setToast] = useState(null);
   const [inviteModal, setInviteModal] = useState(false);
-  const [inviteForm, setInviteForm] = useState({ name:'', email:'', role:'TECHNICIAN' });
+  const [inviteForm, setInviteForm] = useState({ name:'', email:'', password:'', role:'TECHNICIAN' });
+  // Financial tab state — moved here from IIFE (hooks cannot be inside callbacks)
+  const [newCat,     setNewCat]     = useState('');
+  const [newCatType, setNewCatType] = useState('income');
+  const [newBank,    setNewBank]    = useState({ bank:'', agency:'', account:'', type:'Corrente' });
+  const [newPay,     setNewPay]     = useState('');
+
+  useEffect(() => {
+    api.getUsers().then(r => {
+      if (r.success) setUsers(r.data || []);
+      else setUsers([]);
+    });
+  }, []);
 
   const saveCompany = () => setToast('Configurações da empresa salvas!');
   const saveSla     = () => setToast('SLAs atualizados!');
   const saveNotif   = () => setToast('Preferências de notificação salvas!');
 
-  const invite = () => {
-    if (!inviteForm.name||!inviteForm.email) return;
-    setUsers(p=>[...p,{id:Date.now(),...inviteForm,status:'ACTIVE',lastLogin:'—'}]);
-    setInviteModal(false);
-    setInviteForm({name:'',email:'',role:'TECHNICIAN'});
-    setToast(`Convite enviado para ${inviteForm.email}!`);
+  const invite = async () => {
+    if (!inviteForm.name || !inviteForm.email || !inviteForm.password) { setToast('Nome, e-mail e senha são obrigatórios'); return; }
+    const result = await api.register(inviteForm.name, inviteForm.email, inviteForm.password, inviteForm.role);
+    if (result.success) {
+      setUsers(p => [...p, { ...result.user, status: 'ACTIVE' }]);
+      setInviteModal(false);
+      setInviteForm({ name:'', email:'', password:'', role:'TECHNICIAN' });
+      setToast(`Usuário ${inviteForm.email} criado com sucesso!`);
+    } else {
+      setToast(result.error || 'Erro ao criar usuário');
+    }
   };
 
-  const deactivateUser = id => { setUsers(p=>p.map(u=>u.id===id?{...u,status:'INACTIVE'}:u)); setToast('Usuário desativado.'); };
+  const deactivateUser = async id => {
+    const result = await api.deactivateUser(id);
+    if (result.success) { setUsers(p => p.map(u => u.id===id ? {...u, status:'INACTIVE'} : u)); setToast('Usuário desativado.'); }
+    else setToast(result.error || 'Erro ao desativar usuário');
+  };
 
   const ROLE_LABEL = { ADMIN:'Administrador', MANAGER:'Gerente', TECHNICIAN:'Técnico' };
 
@@ -3772,7 +3990,7 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
               </div>
               <div className="grid grid-cols-3 gap-4">
                 {Object.entries(TAX_REGIMES).map(([key,reg])=>(
-                  <button key={key} onClick={()=>setTaxRegime(key)}
+                  <button key={key} onClick={()=>{setTaxRegime(key);localStorage.setItem('opticom_taxRegime',key);}}
                     className={`text-left p-4 rounded-xl border-2 transition-all ${taxRegime===key?'border-blue-500 bg-blue-50':'border-gray-200 bg-white hover:border-gray-300'}`}>
                     <div className="flex items-center gap-2 mb-2">
                       <span className={`w-2.5 h-2.5 rounded-full ${reg.dot}`}/>
@@ -3849,10 +4067,6 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
       })()}
 
       {tab==='financial'&&(()=>{
-        const [newCat,    setNewCat]    = React.useState('');
-        const [newCatType,setNewCatType]= React.useState('income');
-        const [newBank,   setNewBank]   = React.useState({ bank:'', agency:'', account:'', type:'Corrente' });
-        const [newPay,    setNewPay]    = React.useState('');
         const activeBanks = bankAccounts.filter(b=>b.active);
         const activePayTotal = payMethods.filter(p=>p.active).length;
         return (
@@ -3917,9 +4131,9 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
               <div className="space-y-2 mb-4">
                 {bankAccounts.map(b=>(
                   <div key={b.id} className={`flex items-center gap-4 p-3 rounded-xl border ${b.active?'border-gray-200 bg-white':'border-gray-100 bg-gray-50 opacity-60'}`}>
-                    <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">{b.bank[0]}</div>
+                    <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">{(b.bank||b.name||'?')[0]}</div>
                     <div className="flex-1">
-                      <p className="text-sm font-semibold text-gray-800">{b.bank}</p>
+                      <p className="text-sm font-semibold text-gray-800">{b.bank||b.name}</p>
                       <p className="text-xs text-gray-400">Ag. {b.agency} · CC {b.account} · {b.type}</p>
                     </div>
                     <p className="text-sm font-semibold text-green-700">{fmt(b.balance)}</p>
@@ -3990,13 +4204,13 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
               <tbody className="divide-y divide-gray-100">
                 {users.map(u=>(
                   <tr key={u.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-xs font-bold shrink-0">{u.name[0]}</div><p className="font-medium text-gray-800">{u.name}</p></div></td>
+                    <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white text-xs font-bold shrink-0">{(u.name||'?')[0]}</div><p className="font-medium text-gray-800">{u.name}</p></div></td>
                     <td className="px-4 py-3 text-gray-600 text-xs">{u.email}</td>
                     <td className="px-4 py-3"><Badge status={u.role}/></td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{u.lastLogin}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{u.last_login ? new Date(u.last_login).toLocaleDateString('pt-BR') : u.lastLogin || '—'}</td>
                     <td className="px-4 py-3"><Badge status={u.status}/></td>
                     <td className="px-4 py-3">
-                      {u.id!==1&&u.status==='ACTIVE'&&<button onClick={()=>deactivateUser(u.id)} className="text-xs text-red-500 hover:underline">Desativar</button>}
+                      {u.status==='ACTIVE'&&<button onClick={()=>deactivateUser(u.id)} className="text-xs text-red-500 hover:underline">Desativar</button>}
                     </td>
                   </tr>
                 ))}
@@ -4005,9 +4219,9 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
           </div>
           <Modal open={inviteModal} onClose={()=>setInviteModal(false)} title="Convidar Usuário" size="sm">
             <div className="space-y-4">
-              {[{label:'Nome',key:'name',placeholder:'Nome completo'},{label:'E-mail',key:'email',placeholder:'email@empresa.com.br'}].map(f=>(
+              {[{label:'Nome',key:'name',placeholder:'Nome completo',type:'text'},{label:'E-mail',key:'email',placeholder:'email@empresa.com.br',type:'email'},{label:'Senha inicial',key:'password',placeholder:'Mínimo 6 caracteres',type:'password'}].map(f=>(
                 <div key={f.key}><label className="block text-sm font-medium text-gray-700 mb-1">{f.label}</label>
-                  <input value={inviteForm[f.key]} onChange={e=>setInviteForm(p=>({...p,[f.key]:e.target.value}))} placeholder={f.placeholder}
+                  <input type={f.type} value={inviteForm[f.key]} onChange={e=>setInviteForm(p=>({...p,[f.key]:e.target.value}))} placeholder={f.placeholder}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/></div>
               ))}
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Perfil</label>
@@ -4153,21 +4367,44 @@ function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(true);
   const [page, setPage]         = useState('dashboard');
+  const [user, setUser]         = useState(() => api.user);
   const [collapsed, setCollapsed] = useState(false);
   // Regime tributário global — propagado por toda a aplicação
-  const [taxRegime, setTaxRegime] = useState('REAL');
+  const [taxRegime, setTaxRegime] = useState(() => localStorage.getItem('opticom_taxRegime') || 'REAL');
   // Configurações financeiras globais
   const [incomeCats,  setIncomeCats]  = useState(INCOME_CATS_INIT);
   const [expenseCats, setExpenseCats] = useState(EXPENSE_CATS_INIT);
   const [bankAccounts,setBankAccounts]= useState(BANK_ACCOUNTS_INIT);
   const [payMethods,  setPayMethods]  = useState(PAYMENT_METHODS_INIT);
 
+  useEffect(() => {
+    if (!api.token) return;
+    api.getBankAccounts().then(r => {
+      if (r.success) setBankAccounts((r.data || []).map(b => ({
+        ...b,
+        bank: b.bank_name || b.name || '',
+        account: b.account_number || b.account || '',
+        agency: b.agency || '—',
+        type: b.type || 'Corrente',
+        balance: b.balance || 0,
+        active: b.active !== undefined ? b.active : true
+      })));
+    });
+    api.getPaymentMethods().then(r => {
+      if (r.success) setPayMethods((r.data || []).map(m => ({
+        ...m,
+        active: m.active !== undefined ? m.active : true
+      })));
+    });
+  }, []);
+
   // Sincronizar loggedIn com token em sessionStorage
   // Verificar continuamente para detectar logout automático via 401
   useEffect(() => {
     const checkAuth = () => {
       const token = sessionStorage.getItem('opticom_token');
-      const isAuthenticated = !!(token && api.user);
+      // api.user é restaurado do sessionStorage no constructor — basta checar o token
+      const isAuthenticated = !!token;
       setLoggedIn(isAuthenticated);
     };
 
@@ -4180,7 +4417,7 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  if (!loggedIn) return <LoginPage onLogin={()=>setLoggedIn(true)}/>;
+  if (!loggedIn) return <LoginPage onLogin={()=>{ setUser(api.user); setLoggedIn(true); }}/>;
 
   const renderPage = () => {
     switch(page) {
@@ -4193,7 +4430,6 @@ function App() {
       case 'technicians': return <TechniciansPage/>;
       case 'fleet':       return <FleetPage/>;
       case 'settings':    return <SettingsPage taxRegime={taxRegime} setTaxRegime={setTaxRegime} incomeCats={incomeCats} setIncomeCats={setIncomeCats} expenseCats={expenseCats} setExpenseCats={setExpenseCats} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} payMethods={payMethods} setPayMethods={setPayMethods}/>;
-      case 'audit':       return <AuditPage/>;
       default:            return <div className="p-10 text-center text-gray-400">Módulo não encontrado</div>;
     }
   };
@@ -4201,9 +4437,9 @@ function App() {
   const regime = TAX_REGIMES[taxRegime];
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed}/>
+      <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} user={user}/>
       <div className="flex-1 flex flex-col overflow-hidden">
-        <Header page={page} onLogout={()=>setLoggedIn(false)} setPage={setPage} regime={regime}/>
+        <Header page={page} onLogout={()=>setLoggedIn(false)} setPage={setPage} regime={regime} user={user}/>
         <main className="flex-1 overflow-y-auto bg-gray-50">
           {renderPage()}
         </main>

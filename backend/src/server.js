@@ -18,22 +18,34 @@ const auditRoutes = require('./routes/audit');
 const categoriesRoutes = require('./routes/categories');
 const bankAccountsRoutes = require('./routes/bank-accounts');
 const paymentMethodsRoutes = require('./routes/payment-methods');
+const usersRoutes = require('./routes/users');
+const settingsRoutes = require('./routes/settings');
 
 const authMiddleware = require('./middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Validar CORS obrigatoriamente em produção
-const corsOrigins = process.env.CORS_ORIGIN?.split(',') || [];
+// CORS: aceita origens explícitas + qualquer subdomínio *.vercel.app + localhost
+const corsOrigins = process.env.CORS_ORIGIN?.split(',').map(s => s.trim()).filter(Boolean) || [];
 
-if (corsOrigins.length === 0 && process.env.NODE_ENV === 'production') {
-  throw new Error('❌ CORS_ORIGIN must be defined in production environment');
-}
+const corsOriginFn = (origin, callback) => {
+  if (!origin) return callback(null, true); // requests sem origin (curl, Postman, etc.)
+  const allowed = [
+    ...corsOrigins,
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:3000',
+  ];
+  if (allowed.includes(origin) || /\.vercel\.app$/.test(origin) || /\.railway\.app$/.test(origin)) {
+    return callback(null, true);
+  }
+  return callback(new Error(`CORS: origem não permitida — ${origin}`));
+};
 
 // Middleware
 app.use(cors({
-  origin: corsOrigins.length > 0 ? corsOrigins : 'http://localhost:3000',
+  origin: corsOriginFn,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -86,6 +98,8 @@ app.use('/api/audit', authMiddleware, auditRoutes);
 app.use('/api/categories', authMiddleware, categoriesRoutes);
 app.use('/api/bank-accounts', authMiddleware, bankAccountsRoutes);
 app.use('/api/payment-methods', authMiddleware, paymentMethodsRoutes);
+app.use('/api/users', authMiddleware, usersRoutes);
+app.use('/api/settings', authMiddleware, settingsRoutes);
 
 // Error handling
 app.use((err, req, res, next) => {

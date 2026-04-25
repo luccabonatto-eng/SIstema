@@ -62,11 +62,11 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'customer_id, type e value são obrigatórios' });
     }
 
-    // Auto-gerar número se não fornecido
+    // Auto-gerar número via sequence PostgreSQL (sem race condition em uso concorrente)
     if (!number) {
-      const { count } = await supabase.from('contracts').select('*', { count: 'exact', head: true });
-      const seq = String((count || 0) + 1).padStart(3, '0');
-      number = `CTR-${new Date().getFullYear()}-${seq}`;
+      const { data: seqData, error: seqErr } = await supabase.rpc('next_contract_number');
+      if (seqErr) throw seqErr;
+      number = seqData;
     }
 
     // Validação robusta
@@ -124,7 +124,7 @@ router.put('/:id', async (req, res) => {
         updated_at: new Date().toISOString()
       })
       .eq('id', id)
-      .select();
+      .select('*, customers(*)');
 
     if (error) throw error;
     if (!data || data.length === 0) return res.status(404).json({ error: 'Contrato não encontrado' });

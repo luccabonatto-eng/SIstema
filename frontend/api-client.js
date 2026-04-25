@@ -7,8 +7,12 @@ const API_BASE_URL = window.location.origin.includes('localhost')
 
 class OpticomAPI {
   constructor() {
-    this.user = null;
     this.token = sessionStorage.getItem('opticom_token') || null;
+    try {
+      this.user = JSON.parse(sessionStorage.getItem('opticom_user') || 'null');
+    } catch {
+      this.user = null;
+    }
   }
 
   // === Autenticação ===
@@ -27,6 +31,7 @@ class OpticomAPI {
       this.token = data.token;
       this.user = data.user;
       sessionStorage.setItem('opticom_token', data.token);
+      sessionStorage.setItem('opticom_user', JSON.stringify(data.user));
 
       return { success: true, user: data.user };
     } catch (error) {
@@ -55,6 +60,7 @@ class OpticomAPI {
     this.user = null;
     this.token = null;
     sessionStorage.removeItem('opticom_token');
+    sessionStorage.removeItem('opticom_user');
   }
 
   isAuthenticated() {
@@ -240,6 +246,37 @@ class OpticomAPI {
 
   async deleteTransaction(id) {
     return this._fetch(`/transactions/${id}`, { method: 'DELETE' });
+  }
+
+  // === Manutenção de Veículos ===
+  async getVehicleMaintenance(vehicleId) {
+    return this._fetch(`/vehicles/${vehicleId}/maintenance`);
+  }
+
+  async createVehicleMaintenance(vehicleId, data) {
+    return this._fetch(`/vehicles/${vehicleId}/maintenance`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // === Usuários ===
+  async getUsers() {
+    return this._fetch('/users');
+  }
+
+  async updateUser(id, data) {
+    return this._fetch(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deactivateUser(id) {
+    return this._fetch(`/users/${id}`, { method: 'DELETE' });
+  }
+
+  // === Configurações do Sistema ===
+  async getSetting(key) {
+    return this._fetch(`/settings/${key}`);
+  }
+
+  async setSetting(key, value) {
+    return this._fetch(`/settings/${key}`, { method: 'PUT', body: JSON.stringify({ value }) });
   }
 
   // === Auditoria ===

@@ -65,11 +65,11 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'customer_id e type são obrigatórios' });
     }
 
-    // Auto-gerar número se não fornecido
+    // Auto-gerar número via sequence PostgreSQL (sem race condition em uso concorrente)
     if (!number) {
-      const { count } = await supabase.from('orders').select('*', { count: 'exact', head: true });
-      const seq = String((count || 0) + 1).padStart(5, '0');
-      number = `OS-${new Date().getFullYear()}-${seq}`;
+      const { data: seqData, error: seqErr } = await supabase.rpc('next_order_number');
+      if (seqErr) throw seqErr;
+      number = seqData;
     }
 
     const { data, error } = await supabase
@@ -119,7 +119,7 @@ router.put('/:id', async (req, res) => {
         updated_at: new Date().toISOString()
       })
       .eq('id', id)
-      .select();
+      .select('*, customers(*), technicians(*)');
 
     if (error) throw error;
     if (!data || data.length === 0) return res.status(404).json({ error: 'OS não encontrada' });
