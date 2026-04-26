@@ -2613,6 +2613,51 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
               </div>
               )}
 
+              {/* ── Margens ───────────────────────────────────────── */}
+              {hasData&&(
+              <div className="grid grid-cols-3 gap-4">
+                {[
+                  { l:'Margem Bruta',         formula:'Lucro Bruto / Receita Líquida',       c:lb,   p:lbP   },
+                  { l:'Margem Operacional',    formula:'EBIT / Receita Líquida',              c:ebit, p:ebitP },
+                  { l:'Margem Líquida',        formula:'Lucro Líquido / Receita Líquida',     c:ll,   p:llP   },
+                ].map(({l,formula,c,p})=>{
+                  const pct    = recLiq>0  ? (c/recLiq*100)   : null;
+                  const pctP   = recLiqP>0 ? (p/recLiqP*100)  : null;
+                  const diff   = pct!==null&&pctP!==null ? pct-pctP : null;
+                  const good   = pct===null ? false : pct>=0;
+                  const bar    = pct===null ? 0 : Math.min(Math.abs(pct),100);
+                  return (
+                    <div key={l} className={`rounded-xl border p-4 ${good?'bg-white border-gray-200':'bg-red-50 border-red-200'}`}>
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{l}</p>
+                          <p className={`text-2xl font-bold mt-0.5 ${pct===null?'text-gray-300':good?'text-gray-800':'text-red-700'}`}>
+                            {pct===null?'—':`${pct.toFixed(1)}%`}
+                          </p>
+                        </div>
+                        {pct!==null&&(
+                          <span className={`text-xs font-bold px-2 py-1 rounded-lg mt-0.5 ${good?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>
+                            {good?'▲ Positiva':'▼ Negativa'}
+                          </span>
+                        )}
+                      </div>
+                      {/* barra de progresso */}
+                      <div className="h-1.5 rounded-full bg-gray-100 mb-2.5 overflow-hidden">
+                        <div className={`h-full rounded-full transition-all ${good?'bg-green-400':'bg-red-400'}`} style={{width:`${bar}%`}}/>
+                      </div>
+                      <p className="text-xs text-gray-400">{formula}</p>
+                      {diff!==null&&(
+                        <p className={`text-xs font-medium mt-1 ${diff>0?'text-green-600':diff<0?'text-red-500':'text-gray-400'}`}>
+                          {diff>0?`▲ +${diff.toFixed(1)} p.p.`:diff<0?`▼ ${diff.toFixed(1)} p.p.`:'= sem variação'} vs {prevLabel}
+                          {pctP!==null&&<span className="text-gray-400 font-normal"> (era {pctP.toFixed(1)}%)</span>}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              )}
+
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                 <div className="px-5 py-3.5 border-b border-gray-100 flex flex-wrap gap-3 items-center bg-gray-50">
                   <div className="flex-1 min-w-0">
