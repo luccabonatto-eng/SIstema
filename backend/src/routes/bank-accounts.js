@@ -16,11 +16,11 @@ router.get('/', async (req, res) => {
 
 router.post('/', checkRole('ADMIN', 'MANAGER'), async (req, res) => {
   try {
-    const { name, bank_name, account_number, balance } = req.body;
+    const { name, bank_name, account_number, balance, initial_balance } = req.body;
     if (!name) return res.status(400).json({ error: 'Nome é obrigatório' });
     const { data, error } = await supabase
       .from('bank_accounts')
-      .insert([{ name, bank_name, account_number, balance: balance || 0 }])
+      .insert([{ name, bank_name, account_number, balance: balance || 0, initial_balance: initial_balance || 0 }])
       .select();
     if (error) throw error;
     res.status(201).json(data[0]);
@@ -32,7 +32,7 @@ router.post('/', checkRole('ADMIN', 'MANAGER'), async (req, res) => {
 router.put('/:id', checkRole('ADMIN', 'MANAGER'), async (req, res) => {
   try {
     const allowed = {};
-    ['name', 'bank_name', 'account_number', 'balance'].forEach(f => {
+    ['name', 'bank_name', 'account_number', 'balance', 'initial_balance'].forEach(f => {
       if (req.body.hasOwnProperty(f)) allowed[f] = req.body[f];
     });
     const { data, error } = await supabase

@@ -470,9 +470,19 @@ const MENU = [
   { id:'settings',    label:'Configurações',     icon:'settings',    group:'Sistema'  },
 ];
 
-const Sidebar = ({ page, setPage, collapsed, setCollapsed, user }) => {
-  const ungrouped = MENU.filter(m=>!m.group);
-  const groups = [...new Set(MENU.filter(m=>m.group).map(m=>m.group))];
+const ALL_PAGE_IDS = MENU.map(m=>m.id);
+const DEFAULT_PERMISSIONS = {
+  ADMIN:      [...ALL_PAGE_IDS],
+  MANAGER:    ['dashboard','orders','financial','inventory','fleet','customers','contracts','technicians'],
+  TECHNICIAN: ['dashboard','orders'],
+};
+
+const Sidebar = ({ page, setPage, collapsed, setCollapsed, user, permissions }) => {
+  const role = user?.role || 'TECHNICIAN';
+  const allowed = new Set((permissions||DEFAULT_PERMISSIONS)[role] || DEFAULT_PERMISSIONS[role] || []);
+  const visibleMenu = MENU.filter(m=>allowed.has(m.id));
+  const ungrouped = visibleMenu.filter(m=>!m.group);
+  const groups = [...new Set(visibleMenu.filter(m=>m.group).map(m=>m.group))];
   const NavBtn = ({ m }) => (
     <button onClick={()=>setPage(m.id)}
       className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${collapsed?'justify-center px-0':''} ${page===m.id?'bg-blue-600 text-white':'text-gray-400 hover:text-white hover:bg-gray-800'}`}
@@ -503,7 +513,7 @@ const Sidebar = ({ page, setPage, collapsed, setCollapsed, user }) => {
           <div key={g} className="mt-3">
             {!collapsed&&<p className="px-4 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-widest">{g}</p>}
             {collapsed&&<div className="mx-3 my-1 border-t border-gray-700"/>}
-            {MENU.filter(m=>m.group===g).map(m=><NavBtn key={m.id} m={m}/>)}
+            {visibleMenu.filter(m=>m.group===g).map(m=><NavBtn key={m.id} m={m}/>)}
           </div>
         ))}
       </nav>
@@ -1906,9 +1916,9 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
   const [dateToR,   setDateToR]   = useState('');
   const [dateFromP, setDateFromP] = useState('');
   const [dateToP,   setDateToP]   = useState('');
-  const [dateFromCF,setDateFromCF]= useState('2026-04-01');
-  const [dateToCF,  setDateToCF]  = useState('2026-04-30');
-  const [drePeriod, setDrePeriod] = useState('Q1-2026');
+  const [dateFromCF,setDateFromCF]= useState(()=>{ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`; });
+  const [dateToCF,  setDateToCF]  = useState(()=>{ const d=new Date(); const e=new Date(d.getFullYear(),d.getMonth()+1,0); return e.toISOString().split('T')[0]; });
+  const [drePeriod, setDrePeriod] = useState(()=>new Date().toISOString().slice(0,7));
   const [budPeriod, setBudPeriod] = useState('2026-03');
   const [approvalSel, setApprovalSel] = useState(new Set());
   const [transactions, setTx]   = useState([]);
@@ -1990,31 +2000,14 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
     </div>
   );
 
-  // períodos disponíveis para DRE (fator relativo ao Q1-2026)
-  const DRE_PERIODS = {
-    'Q1-2026':{ label:'Q1 2026 — Jan a Mar',  f:1.000, prev:'Q1-2025' },
-    'Q2-2026':{ label:'Q2 2026 — Abr a Jun',  f:1.052, prev:'Q2-2025' },
-    'Q3-2026':{ label:'Q3 2026 — Jul a Set',  f:1.087, prev:'Q3-2025' },
-    'Q4-2026':{ label:'Q4 2026 — Out a Dez',  f:1.031, prev:'Q4-2025' },
-    'Q1-2025':{ label:'Q1 2025 — Jan a Mar',  f:null,  prev:'Q1-2024' },
-    'Q2-2025':{ label:'Q2 2025 — Abr a Jun',  f:null,  prev:'Q2-2024' },
-    'ANO-2026':{ label:'Ano 2026 — Jan a Dez',f:4.17,  prev:'ANO-2025' },
-    'ANO-2025':{ label:'Ano 2025 — Jan a Dez',f:null,  prev:'ANO-2024' },
+  const monthLabel = ym => {
+    const [y,m] = ym.split('-');
+    const nms = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    return `${nms[parseInt(m)-1]} ${y}`;
   };
-  // retorna {v1, v2} escalados para o período selecionado
-  const scaledDre = (raw26, raw25) => {
-    const p = DRE_PERIODS[drePeriod];
-    if (!p) return { v1: raw26, v2: raw25 };
-    if (drePeriod === 'Q1-2025' || drePeriod === 'Q2-2025' || drePeriod === 'ANO-2025') {
-      // período anterior como atual: v1 = raw25 escalado, v2 = raw25 * 0.87 (estimado)
-      const f25 = drePeriod==='ANO-2025' ? 4.02 : drePeriod==='Q2-2025' ? 1.03 : 1.00;
-      return { v1: raw25 ? Math.round(raw25 * f25) : 0, v2: raw25 ? Math.round(raw25 * f25 * 0.88) : 0 };
-    }
-    // período 2026: v1 = raw26 * f, v2 = raw25 * f * 1.04 (crescimento prev year)
-    return {
-      v1: raw26 ? Math.round(raw26 * p.f) : 0,
-      v2: raw25 ? Math.round(raw25 * p.f * 1.04) : 0,
-    };
+  const prevMonth = ym => {
+    const [y,m] = ym.split('-').map(Number);
+    return m===1 ? `${y-1}-12` : `${y}-${String(m-1).padStart(2,'0')}`;
   };
 
   // períodos para Orçado vs Real
@@ -2076,40 +2069,24 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
     setToast(`${parsed.length} lançamento(s) importado(s)!`);
   };
 
-  // projected cash flow — usa intervalo dateFromCF/dateToCF
   const projectedFlow = () => {
-    const saldo = 12500000;
-    const from = dateFromCF || '2026-04-01';
-    const to   = dateToCF   || '2026-04-30';
-    // gera lista de datas do intervalo
+    const now = new Date();
+    const defaultFrom = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
+    const defaultTo   = new Date(now.getFullYear(),now.getMonth()+1,0).toISOString().split('T')[0];
+    const from = dateFromCF || defaultFrom;
+    const to   = dateToCF   || defaultTo;
     const days = [];
-    const cur = new Date(from);
-    const end = new Date(to);
+    const cur = new Date(from); const end = new Date(to);
     while (cur <= end) {
       const dateStr = cur.toISOString().split('T')[0];
       const dd = dateStr.slice(8,10)+'/'+dateStr.slice(5,7);
-      const ins  = transactions.filter(t=>t.type==='INCOME'  && txDue(t)===dateStr && t.status!=='RECEIVED').reduce((s,t)=>s+t.amount,0);
-      const outs = transactions.filter(t=>t.type==='EXPENSE' && txDue(t)===dateStr && t.status!=='PAID').reduce((s,t)=>s+t.amount,0);
+      const ins  = transactions.filter(t=>t.type==='INCOME'  && txDue(t)===dateStr).reduce((s,t)=>s+t.amount,0);
+      const outs = transactions.filter(t=>t.type==='EXPENSE' && txDue(t)===dateStr).reduce((s,t)=>s+t.amount,0);
       if (ins>0||outs>0) days.push({ date:dd, dateStr, ins, outs, diff:ins-outs });
       cur.setDate(cur.getDate()+1);
     }
-    // entradas mock para enriquecer projeção (apenas se dentro do intervalo)
-    const extras = [
-      { dateStr:'2026-04-12', date:'12/04', ins:850000,  outs:0,       diff:850000  },
-      { dateStr:'2026-04-15', date:'15/04', ins:320000,  outs:1800000, diff:-1480000},
-      { dateStr:'2026-04-18', date:'18/04', ins:0,       outs:620000,  diff:-620000 },
-      { dateStr:'2026-04-22', date:'22/04', ins:1200000, outs:0,       diff:1200000 },
-      { dateStr:'2026-04-28', date:'28/04', ins:500000,  outs:900000,  diff:-400000 },
-      { dateStr:'2026-05-05', date:'05/05', ins:1800000, outs:0,       diff:1800000 },
-      { dateStr:'2026-05-10', date:'10/05', ins:0,       outs:2200000, diff:-2200000},
-      { dateStr:'2026-05-20', date:'20/05', ins:950000,  outs:600000,  diff:350000  },
-    ];
-    extras.forEach(e=>{
-      if (e.dateStr >= from && e.dateStr <= to && !days.find(d=>d.dateStr===e.dateStr))
-        days.push(e);
-    });
     days.sort((a,b)=>a.dateStr.localeCompare(b.dateStr));
-    let running = saldo;
+    let running = bankAccounts.reduce((s,b)=>s+(b.initial_balance||0),0);
     return days.map(d=>{ running+=d.diff; return {...d, balance:running}; });
   };
 
@@ -2142,130 +2119,6 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
     </div>
   );
 
-  const cfData = [{v:5000000},{v:5180000},{v:4680000},{v:4200000},{v:3800000},{v:4200000},{v:3800000}];
-
-  // DRE Gerencial dinâmica — Q1 2026 vs Q1 2025
-  // Valores de resultado (EBIT, EBITDA, LAIR, impostos, LL) vêm do TAX_REGIMES selecionado
-  const _tr  = TAX_REGIMES[taxRegime];
-  const _d26 = _tr.dre26;
-  const _d25 = _tr.dre25;
-  // Lucroo bruto = Receita Líquida - CSP (mesmo para todos)
-  const _lb26 = _d26.rl - 20450000;
-  const _lb25 = _d25.rl - 17580000;
-
-  // Seção de deduções: muda conforme regime
-  const _dedRows = taxRegime === 'SIMPLES'
-    ? [
-        { t:'item', l:_tr.dasLabel,                              v1: _d26.dasv,   v2: _d25.dasv   },
-        { t:'item', l:'Descontos Concedidos',                    v1:  -380000,    v2:  -310000    },
-        { t:'item', l:'Cancelamentos e Devoluções',              v1:  -153400,    v2:  -127550    },
-      ]
-    : [
-        { t:'item', l:'ISS — Imposto Sobre Serviços (5%)',       v1: -2420000,    v2: -2065000    },
-        { t:'item', l:_tr.pisLabel,                              v1: _d26.pisv,   v2: _d25.pisv   },
-        { t:'item', l:_tr.cofinsLabel,                           v1: _d26.cofinsv,v2: _d25.cofinsv},
-        { t:'item', l:'Descontos Concedidos',                    v1:  -380000,    v2:  -310000    },
-        { t:'item', l:'Cancelamentos e Devoluções',              v1:  -153400,    v2:  -127550    },
-      ];
-
-  // Seção de impostos: muda conforme regime
-  const _impLabel = taxRegime === 'SIMPLES'
-    ? '(Impostos incluídos no DAS — linha de Deduções)'
-    : taxRegime === 'PRESUMIDO'
-    ? '(-) IMPOSTOS SOBRE O LUCRO — BASE PRESUMIDA (32%)'
-    : '(-) IMPOSTOS SOBRE O LUCRO — LUCRO REAL';
-
-  const _impRows = taxRegime === 'SIMPLES'
-    ? [{ t:'item', l:'IRPJ, CSLL, PIS, COFINS, ISS e CPP unificados no DAS', v1:0, v2:0 }]
-    : taxRegime === 'PRESUMIDO'
-    ? [
-        { t:'item', l:`IRPJ — ${_tr.irpjLabel}`,                 v1:_d26.irpj,    v2:_d25.irpj    },
-        { t:'item', l:`CSLL — ${_tr.csllLabel}`,                 v1:_d26.csll,    v2:_d25.csll    },
-      ]
-    : [
-        { t:'item', l:`${_tr.irpjLabel}`,                        v1:_d26.irpj,    v2:_d25.irpj    },
-        { t:'item', l:`${_tr.csllLabel}`,                        v1:_d26.csll,    v2:_d25.csll    },
-      ];
-
-  const dreData = [
-    // ── RECEITA BRUTA ──────────────────────────────────────────────────────────
-    { t:'header',   l:'RECEITA BRUTA DE SERVIÇOS' },
-    { t:'item',     l:'Contratos de Manutenção',              v1: 28500000, v2: 24200000 },
-    { t:'item',     l:'Ordens de Serviço (OS)',               v1:  9800000, v2:  8100000 },
-    { t:'item',     l:'Projetos e Instalações',               v1:  6200000, v2:  5800000 },
-    { t:'item',     l:'Locação de Equipamentos',              v1:  1800000, v2:  1500000 },
-    { t:'item',     l:'Suporte Técnico On-Site',              v1:  2100000, v2:  1700000 },
-    { t:'subtotal', l:'Receita Bruta Total',                  v1: 48400000, v2: 41300000 },
-
-    // ── DEDUÇÕES (dinâmico por regime) ────────────────────────────────────────
-    { t:'header',   l:`(-) DEDUÇÕES DA RECEITA BRUTA — ${_tr.label.toUpperCase()}` },
-    ..._dedRows,
-    { t:'subtotal', l:'Total Deduções',                       v1: _d26.totalDed, v2: _d25.totalDed },
-
-    // ── RECEITA LÍQUIDA ────────────────────────────────────────────────────────
-    { t:'result',   l:'(=) RECEITA LÍQUIDA DE SERVIÇOS',      v1: _d26.rl,       v2: _d25.rl,       margin:true },
-
-    // ── CUSTO DOS SERVIÇOS PRESTADOS ───────────────────────────────────────────
-    { t:'header',   l:'(-) CUSTO DOS SERVIÇOS PRESTADOS (CSP)' },
-    { t:'item',     l:'Mão de Obra Técnica Direta',           v1:-12800000, v2:-11000000 },
-    { t:'item',     l:'Materiais e Componentes',              v1: -4200000, v2: -3600000 },
-    { t:'item',     l:'Combustível e Transporte de Campo',    v1: -1850000, v2: -1620000 },
-    { t:'item',     l:'Terceiros e Subcontratados',           v1:  -980000, v2:  -820000 },
-    { t:'item',     l:'Depreciação — Equipamentos de Campo',  v1:  -620000, v2:  -540000 },
-    { t:'subtotal', l:'Total CSP',                            v1:-20450000, v2:-17580000 },
-
-    // ── LUCRO BRUTO ────────────────────────────────────────────────────────────
-    { t:'result',   l:'(=) LUCRO BRUTO',                      v1: _lb26,         v2: _lb25,         margin:true },
-
-    // ── DESPESAS COMERCIAIS ────────────────────────────────────────────────────
-    { t:'header',   l:'(-) DESPESAS COMERCIAIS E DE VENDAS' },
-    { t:'item',     l:'Comissões de Vendas',                  v1:  -720000, v2:  -620000 },
-    { t:'item',     l:'Marketing e Publicidade',              v1:  -380000, v2:  -290000 },
-    { t:'item',     l:'Viagens e Representação Comercial',    v1:  -180000, v2:  -155000 },
-    { t:'subtotal', l:'Subtotal Comercial',                   v1: -1280000, v2: -1065000 },
-
-    // ── DESPESAS G&A ───────────────────────────────────────────────────────────
-    { t:'header',   l:'(-) DESPESAS GERAIS E ADMINISTRATIVAS (G&A)' },
-    { t:'item',     l:'Pessoal Administrativo (Sal. + Encargos)', v1:-5800000, v2:-5200000 },
-    { t:'item',     l:'Pró-labore dos Sócios',                v1: -1200000, v2: -1200000 },
-    { t:'item',     l:'Aluguel e Condomínio',                 v1:  -780000, v2:  -720000 },
-    { t:'item',     l:'Energia, Água e Comunicações',         v1:  -340000, v2:  -310000 },
-    { t:'item',     l:'Material de Escritório e Consumo',     v1:   -95000, v2:   -88000 },
-    { t:'item',     l:'Seguros e Licenças de Software',       v1:  -260000, v2:  -235000 },
-    { t:'item',     l:'Honorários Contábeis e Jurídicos',     v1:  -240000, v2:  -220000 },
-    { t:'item',     l:'Depreciação e Amortização — Adm.',     v1:  -180000, v2:  -165000 },
-    { t:'item',     l:'Outros Custos Administrativos',        v1:  -125000, v2:  -112000 },
-    { t:'subtotal', l:'Subtotal G&A',                         v1: -9020000, v2: -8250000 },
-
-    // ── TOTAL DESPESAS OPERACIONAIS ────────────────────────────────────────────
-    { t:'subtotal', l:'(=) Total Despesas Operacionais',      v1:-10300000, v2: -9315000 },
-
-    // ── EBIT (dinâmico) ────────────────────────────────────────────────────────
-    { t:'result',   l:'(=) EBIT — Resultado Operacional',     v1: _d26.ebit,     v2: _d25.ebit,     margin:true },
-
-    // ── EBITDA ─────────────────────────────────────────────────────────────────
-    { t:'header',   l:'EBITDA (Ajuste para D&A)' },
-    { t:'item',     l:'(+) D&A add-back (Campo + Adm.)',      v1:   800000, v2:   705000 },
-    { t:'result',   l:'(=) EBITDA',                           v1: _d26.ebitda,   v2: _d25.ebitda,   margin:true },
-
-    // ── RESULTADO FINANCEIRO ───────────────────────────────────────────────────
-    { t:'header',   l:'(+/-) RESULTADO FINANCEIRO' },
-    { t:'item',     l:'(+) Receitas Financeiras (CDB / RF)',  v1:   420000, v2:   315000 },
-    { t:'item',     l:'(-) Juros e Encargos de Empréstimos',  v1:  -980000, v2:  -750000 },
-    { t:'item',     l:'(-) IOF e Tarifas Bancárias',          v1:   -45000, v2:   -40000 },
-    { t:'subtotal', l:'Resultado Financeiro Líquido',         v1:  -605000, v2:  -475000 },
-
-    // ── LAIR (dinâmico) ────────────────────────────────────────────────────────
-    { t:'result',   l:'(=) LAIR — Lucro Antes do IR e CSLL', v1: _d26.lair,     v2: _d25.lair,     margin:true },
-
-    // ── IMPOSTOS (dinâmico por regime) ────────────────────────────────────────
-    { t:'header',   l: _impLabel },
-    ..._impRows,
-    { t:'subtotal', l:`Total Impostos — ${_tr.label}`,        v1: _d26.totalImp, v2: _d25.totalImp },
-
-    // ── LUCRO LÍQUIDO (dinâmico) ───────────────────────────────────────────────
-    { t:'grand',    l:'(=) LUCRO LÍQUIDO DO EXERCÍCIO',       v1: _d26.ll,       v2: _d25.ll,       margin:true },
-  ];
 
   const totalIn  = transactions.filter(t=>t.type==='INCOME').reduce((s,t)=>s+t.amount,0);
   const totalOut = transactions.filter(t=>t.type==='EXPENSE').reduce((s,t)=>s+t.amount,0);
@@ -2423,56 +2276,152 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
         })()}
 
         {tab==='cashflow'&&(()=>{
-          const _cf = projectedFlow();
-          const cfFilteredIn  = _cf.reduce((s,r)=>s+r.ins,0);
-          const cfFilteredOut = _cf.reduce((s,r)=>s+r.outs,0);
-          const cfSaldo       = 12500000 + cfFilteredIn - cfFilteredOut;
+          const catMap={};
+          incomeCats.forEach(c=>catMap[c.id]=c);
+          expenseCats.forEach(c=>catMap[c.id]=c);
+          const getCls = t => catMap[t.category_id]?.accounting_class || (t.type==='INCOME'?'OUTRAS_RECEITAS':'OUTRAS_DESPESAS');
+
+          const now=new Date();
+          const defaultFrom=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
+          const defaultTo=new Date(now.getFullYear(),now.getMonth()+1,0).toISOString().split('T')[0];
+          const from=dateFromCF||defaultFrom; const to=dateToCF||defaultTo;
+          const txP=transactions.filter(t=>{const d=t.due_date||''; return d>=from&&d<=to;});
+
+          const sumCls=(type,...cls)=>txP.filter(t=>t.type===type&&cls.includes(getCls(t))).reduce((s,t)=>s+t.amount,0);
+
+          const recClientes = sumCls('INCOME','RECEITA_SERVICO','RECEITA_CONTRATO','OUTRAS_RECEITAS');
+          const pagCSP      = sumCls('EXPENSE','CSP');
+          const pagPessoal  = sumCls('EXPENSE','DESPESA_PESSOAL');
+          const pagAdmin    = sumCls('EXPENSE','DESPESA_ADMINISTRATIVA','DESPESA_COMERCIAL');
+          const pagImpostos = sumCls('EXPENSE','IMPOSTO_RECEITA','IMPOSTO_RENDA');
+          const pagOutOp    = sumCls('EXPENSE','OUTRAS_DESPESAS','DEPRECIACAO');
+          const caixaOper   = recClientes-pagCSP-pagPessoal-pagAdmin-pagImpostos-pagOutOp;
+
+          const recAtivos   = sumCls('INCOME','RECEITA_INVESTIMENTO');
+          const pagAtivos   = sumCls('EXPENSE','INVESTIMENTO');
+          const caixaInv    = recAtivos-pagAtivos;
+
+          const recFin      = sumCls('INCOME','FINANCIAMENTO_ENTRADA');
+          const pagFin      = sumCls('EXPENSE','FINANCIAMENTO_SAIDA','DESPESA_FINANCEIRA');
+          const caixaFin    = recFin-pagFin;
+
+          const varLiq       = caixaOper+caixaInv+caixaFin;
+          const saldoInicial = bankAccounts.reduce((s,b)=>s+(b.initial_balance||0),0);
+          const saldoFinal   = saldoInicial+varLiq;
+
+          const dailyRows   = projectedFlow();
+          const fv  = v=>v===0?'—':v<0?`(${fmt(Math.abs(v))})`:fmt(v);
+          const sfv = v=>v===0?'—':(v>0?'+':'')+fmt(v);
+          const cfLabel=from.slice(0,7)===to.slice(0,7)?monthLabel(from.slice(0,7)):`${from.slice(8,10)}/${from.slice(5,7)} — ${to.slice(8,10)}/${to.slice(5,7)}/${to.slice(0,4)}`;
+
+          const SH=({l})=>(<tr className="bg-gray-100 border-t-2 border-gray-300"><td colSpan="2" className="px-4 py-2 text-xs font-bold text-gray-500 uppercase tracking-wider">{l}</td></tr>);
+          const DR=({l,v,ind=0,tot=false})=>{
+            const pl=['','pl-6','pl-10'][ind]||'pl-6';
+            const bg=tot?'bg-gray-50 border-t border-gray-200':'hover:bg-gray-50 border-t border-gray-100';
+            const tw=tot?'text-gray-800 font-semibold text-sm':'text-gray-600 text-sm';
+            const vw=tot?(v>=0?'text-green-800 font-semibold':'text-red-700 font-semibold'):(v>=0?'text-green-700':'text-red-500');
+            return(<tr className={bg}><td className={`px-4 py-2.5 ${tw} ${pl}`}>{l}</td><td className={`px-4 py-2.5 text-right whitespace-nowrap text-sm ${vw}`}>{fv(v)}</td></tr>);
+          };
+
           return (
           <div className="space-y-4">
-            <div className="grid grid-cols-4 gap-4">
-              <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm"><p className="text-xs text-gray-500">Saldo Atual</p><p className="text-2xl font-bold text-gray-800 mt-1">{fmt(12500000)}</p><p className="text-xs text-gray-400 mt-0.5">2 contas bancárias</p></div>
-              <div className="bg-green-50 border border-green-100 rounded-xl p-4 shadow-sm"><p className="text-xs text-green-600 font-medium">Entradas no Período</p><p className="text-2xl font-bold text-green-700 mt-1">{fmt(cfFilteredIn)}</p></div>
-              <div className="bg-red-50 border border-red-100 rounded-xl p-4 shadow-sm"><p className="text-xs text-red-600 font-medium">Saídas no Período</p><p className="text-2xl font-bold text-red-700 mt-1">{fmt(cfFilteredOut)}</p></div>
-              <div className={`border rounded-xl p-4 shadow-sm ${cfSaldo>=12500000?'bg-blue-50 border-blue-100':'bg-amber-50 border-amber-100'}`}><p className={`text-xs font-medium ${cfSaldo>=12500000?'text-blue-600':'text-amber-600'}`}>Saldo Projetado Final</p><p className={`text-2xl font-bold mt-1 ${cfSaldo>=12500000?'text-blue-700':'text-amber-700'}`}>{fmt(cfSaldo)}</p></div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex-1"><h2 className="text-sm font-bold text-gray-800">DFC — Demonstração dos Fluxos de Caixa</h2><p className="text-xs text-gray-400">Método Direto · CPC 03 · Base: lançamentos por vencimento</p></div>
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-lg font-medium">{cfLabel}</span>
+              <DateFilter from={dateFromCF} setFrom={setDateFromCF} to={dateToCF} setTo={setDateToCF}/>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
-              <h3 className="text-sm font-semibold text-gray-800 mb-1">Evolução do Saldo — Abril/2026</h3>
-              <p className="text-xs text-gray-400 mb-3">Saldo diário</p>
-              <LineChart data={cfData} color="#3b82f6" height={160}/>
-              <div className="flex justify-between mt-1 text-xs text-gray-400">{['01/04','05/04','10/04','15/04','20/04','25/04','30/04'].map(d=><span key={d}>{d}</span>)}</div>
+
+            <div className="grid grid-cols-4 gap-3">
+              {[
+                {l:'Atividades Operacionais',  v:caixaOper, sub:'Operação principal',     pos:'bg-green-50 border-green-200 text-green-800', neg:'bg-red-50 border-red-200 text-red-800'},
+                {l:'Atividades de Investimento',v:caixaInv,  sub:'Ativos e imobilizado',   pos:'bg-blue-50 border-blue-200 text-blue-800',  neg:'bg-orange-50 border-orange-200 text-orange-800'},
+                {l:'Atividades de Financiamento',v:caixaFin, sub:'Empréstimos e aportes',  pos:'bg-purple-50 border-purple-200 text-purple-800',neg:'bg-amber-50 border-amber-200 text-amber-800'},
+                {l:'Variação Líquida de Caixa', v:varLiq,   sub:cfLabel,                  pos:'bg-teal-50 border-teal-200 text-teal-800',  neg:'bg-rose-50 border-rose-200 text-rose-800'},
+              ].map((k,i)=>{
+                const cls=k.v>=0?k.pos:k.neg;
+                const [bg,bdr,tc]=cls.split(' ');
+                return(<div key={i} className={`${bg} border ${bdr} rounded-xl p-4`}>
+                  <p className={`text-xs font-semibold uppercase tracking-wide ${tc}`}>{k.l}</p>
+                  <p className={`text-xl font-bold mt-1 ${tc}`}>{sfv(k.v)}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{k.sub}</p>
+                </div>);
+              })}
             </div>
-            {/* Projected cash flow table */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex items-center justify-between">
+                <div><p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Saldo Inicial do Período</p><p className="text-xs text-gray-400 mt-0.5">Configurado em Configurações → Contas e Saldos</p></div>
+                <p className="text-xl font-bold text-gray-700 ml-4">{fmt(saldoInicial)}</p>
+              </div>
+              <div className={`border rounded-xl p-4 flex items-center justify-between ${saldoFinal>=0?'bg-teal-50 border-teal-200':'bg-rose-50 border-rose-200'}`}>
+                <div><p className={`text-xs font-semibold uppercase tracking-wide ${saldoFinal>=0?'text-teal-600':'text-rose-600'}`}>Saldo Final Projetado</p><p className="text-xs text-gray-400 mt-0.5">Saldo Inicial + Variação Líquida de Caixa</p></div>
+                <p className={`text-xl font-bold ml-4 ${saldoFinal>=0?'text-teal-800':'text-rose-800'}`}>{fmt(saldoFinal)}</p>
+              </div>
+            </div>
+
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-100 flex flex-wrap items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold text-gray-800">Fluxo de Caixa Projetado</h3>
-                  <p className="text-xs text-gray-400 mt-0.5">Saldo acumulado por dia com base nos lançamentos pendentes</p>
-                </div>
-                <DateFilter from={dateFromCF} setFrom={setDateFromCF} to={dateToCF} setTo={setDateToCF}/>
-                <span className="text-xs text-gray-400">Saldo inicial: <strong className="text-gray-700">{fmt(12500000)}</strong></span>
+              <table className="w-full text-sm">
+                <thead><tr className="bg-gray-100 border-b-2 border-gray-300">
+                  <th className="px-4 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wide">Demonstração dos Fluxos de Caixa — {cfLabel}</th>
+                  <th className="px-4 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wide whitespace-nowrap">Valor (R$)</th>
+                </tr></thead>
+                <tbody>
+                  <SH l="1. Atividades Operacionais"/>
+                  {recClientes>0&&<DR l="(+) Recebimentos de Clientes — Serviços e Contratos" v={recClientes} ind={1}/>}
+                  {pagCSP>0     &&<DR l="(-) Pagamentos de Custo dos Serviços (CSP)" v={-pagCSP} ind={1}/>}
+                  {pagPessoal>0 &&<DR l="(-) Pagamentos de Pessoal" v={-pagPessoal} ind={1}/>}
+                  {pagAdmin>0   &&<DR l="(-) Despesas Administrativas e Comerciais" v={-pagAdmin} ind={1}/>}
+                  {pagImpostos>0&&<DR l="(-) Impostos Pagos (ISS, PIS, COFINS, IR/CSLL)" v={-pagImpostos} ind={1}/>}
+                  {pagOutOp>0   &&<DR l="(-) Outros Pagamentos Operacionais" v={-pagOutOp} ind={1}/>}
+                  {recClientes===0&&pagCSP===0&&pagPessoal===0&&pagAdmin===0&&pagImpostos===0&&pagOutOp===0&&(
+                    <tr className="border-t border-gray-100"><td colSpan="2" className="px-4 py-3 text-xs text-gray-400 text-center">Nenhum lançamento operacional — adicione receitas e despesas com as categorias corretas</td></tr>
+                  )}
+                  <DR l="(=) Caixa Líquido das Atividades Operacionais" v={caixaOper} tot/>
+
+                  <SH l="2. Atividades de Investimento"/>
+                  {recAtivos>0&&<DR l="(+) Recebimentos — Venda de Ativos" v={recAtivos} ind={1}/>}
+                  {pagAtivos>0&&<DR l="(-) Pagamentos — Compra de Equipamentos / Veículos" v={-pagAtivos} ind={1}/>}
+                  {recAtivos===0&&pagAtivos===0&&<tr className="border-t border-gray-100"><td colSpan="2" className="px-4 py-3 text-xs text-gray-400 text-center">Nenhum lançamento de investimento no período</td></tr>}
+                  <DR l="(=) Caixa Líquido das Atividades de Investimento" v={caixaInv} tot/>
+
+                  <SH l="3. Atividades de Financiamento"/>
+                  {recFin>0&&<DR l="(+) Empréstimos Obtidos / Aportes de Capital" v={recFin} ind={1}/>}
+                  {pagFin>0&&<DR l="(-) Amortizações, Juros e Encargos Financeiros" v={-pagFin} ind={1}/>}
+                  {recFin===0&&pagFin===0&&<tr className="border-t border-gray-100"><td colSpan="2" className="px-4 py-3 text-xs text-gray-400 text-center">Nenhum lançamento de financiamento no período</td></tr>}
+                  <DR l="(=) Caixa Líquido das Atividades de Financiamento" v={caixaFin} tot/>
+
+                  <tr className={`border-t-2 ${varLiq>=0?'bg-blue-700':'bg-red-700'}`}>
+                    <td className="px-4 py-3.5 text-sm font-bold text-white">(=) VARIAÇÃO LÍQUIDA DE CAIXA NO PERÍODO</td>
+                    <td className="px-4 py-3.5 text-sm font-bold text-white text-right">{sfv(varLiq)}</td>
+                  </tr>
+                  {saldoInicial>0&&<tr className="bg-gray-50 border-t border-gray-200"><td className="px-4 py-2.5 text-sm text-gray-500 pl-6">(+) Saldo Inicial das Contas</td><td className="px-4 py-2.5 text-right text-sm text-gray-700 font-medium">{fmt(saldoInicial)}</td></tr>}
+                  <tr className={`border-t-2 ${saldoFinal>=0?'bg-teal-600':'bg-rose-700'}`}>
+                    <td className="px-4 py-3.5 text-sm font-bold text-white">(=) SALDO FINAL DE CAIXA E EQUIVALENTES</td>
+                    <td className="px-4 py-3.5 text-sm font-bold text-white text-right">{fmt(saldoFinal)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-gray-100 flex items-center gap-3">
+                <div className="flex-1"><h3 className="text-sm font-semibold text-gray-800">Detalhe Diário</h3><p className="text-xs text-gray-400 mt-0.5">Movimentações por dia e saldo acumulado no período</p></div>
               </div>
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Data</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-green-600 uppercase tracking-wide">Entradas</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-red-500 uppercase tracking-wide">Saídas</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Resultado do Dia</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-blue-600 uppercase tracking-wide">Saldo Acumulado</th>
-                  </tr>
-                </thead>
+                <thead className="bg-gray-50 border-b border-gray-200"><tr>
+                  {['Data','Entradas','Saídas','Resultado do Dia','Saldo Acumulado'].map((h,i)=>(
+                    <th key={h} className={`px-4 py-3 text-xs font-semibold uppercase tracking-wide ${i===0?'text-left text-gray-500':'text-right '+(i===1?'text-green-600':i===2?'text-red-500':i===3?'text-gray-500':'text-blue-600')}`}>{h}</th>
+                  ))}
+                </tr></thead>
                 <tbody className="divide-y divide-gray-100">
-                  {projectedFlow().map((row, i)=>(
+                  {dailyRows.length===0
+                    ?<tr><td colSpan="5" className="px-4 py-8 text-center text-sm text-gray-400">Nenhum lançamento no período selecionado — adicione receitas e despesas no módulo Financeiro</td></tr>
+                    :dailyRows.map((r,i)=>(
                     <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 text-gray-700 font-medium">{row.date}/2026</td>
-                      <td className="px-4 py-3 text-right font-medium text-green-600">{row.ins>0?fmt(row.ins):<span className="text-gray-300">—</span>}</td>
-                      <td className="px-4 py-3 text-right font-medium text-red-500">{row.outs>0?fmt(row.outs):<span className="text-gray-300">—</span>}</td>
-                      <td className="px-4 py-3 text-right">
-                        <span className={`text-sm font-semibold ${row.diff>=0?'text-green-600':'text-red-600'}`}>{row.diff>=0?'+':''}{fmt(row.diff)}</span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className={`text-sm font-bold ${row.balance>=12500000?'text-green-700':row.balance>=10000000?'text-blue-700':'text-red-700'}`}>{fmt(row.balance)}</span>
-                      </td>
+                      <td className="px-4 py-2.5 text-gray-700 font-medium">{r.date}</td>
+                      <td className="px-4 py-2.5 text-right font-medium text-green-600">{r.ins>0?fmt(r.ins):<span className="text-gray-300">—</span>}</td>
+                      <td className="px-4 py-2.5 text-right font-medium text-red-500">{r.outs>0?fmt(r.outs):<span className="text-gray-300">—</span>}</td>
+                      <td className="px-4 py-2.5 text-right"><span className={`font-semibold ${r.diff>=0?'text-green-600':'text-red-600'}`}>{r.diff>=0?'+':''}{fmt(r.diff)}</span></td>
+                      <td className="px-4 py-2.5 text-right"><span className={`font-bold ${r.balance>=0?'text-blue-700':'text-red-700'}`}>{fmt(r.balance)}</span></td>
                     </tr>
                   ))}
                 </tbody>
@@ -2483,131 +2432,221 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
         })()}
 
         {tab==='dre'&&(()=>{
-          const _dp = DRE_PERIODS[drePeriod] || DRE_PERIODS['Q1-2026'];
-          const _prevKey = _dp.prev;
-          const _prevLabel = (DRE_PERIODS[_prevKey]||{label:_prevKey}).label.split(' — ')[0];
-          const _curLabel  = _dp.label.split(' — ')[0];
-          // scale all dreData rows
-          const scaledRows = dreData.map(r=>{
-            if(r.t==='header'||r.v1===undefined) return r;
-            const {v1,v2}=scaledDre(r.v1,r.v2);
-            return {...r,v1,v2};
-          });
-          const rl1s = scaledDre(_d26.rl,_d25.rl).v1 || 1;
-          const rl2s = scaledDre(_d26.rl,_d25.rl).v2 || 1;
-          const fv = v => v===0?'—':v<0?`(${fmt(Math.abs(v))})`:fmt(v);
-          const av = (v,base) => v===0?'—':(v/base*100).toFixed(1)+'%';
-          const vp = (v1,v2) => {
-            if(!v1||!v2) return { pct:'—', up:null };
-            const p=((v1-v2)/Math.abs(v2)*100);
-            return { pct:(p>0?'+':'')+p.toFixed(1)+'%', up:p>0 };
+          const curM  = drePeriod;
+          const prevM = prevMonth(curM);
+          const curLabel  = monthLabel(curM);
+          const prevLabel = monthLabel(prevM);
+
+          const catMap={};
+          incomeCats.forEach(c=>catMap[c.id]=c);
+          expenseCats.forEach(c=>catMap[c.id]=c);
+          const getCls    = t => catMap[t.category_id]?.accounting_class||(t.type==='INCOME'?'OUTRAS_RECEITAS':'OUTRAS_DESPESAS');
+          const getCatName= t => catMap[t.category_id]?.name||'Sem Categoria';
+
+          const txOfMonth = m => transactions.filter(t=>(t.due_date||'').startsWith(m));
+          const curTx  = txOfMonth(curM);
+          const prevTx = txOfMonth(prevM);
+
+          // helpers
+          const sumC=(txList,type,...cls)=>txList.filter(t=>t.type===type&&cls.includes(getCls(t))).reduce((s,t)=>s+t.amount,0);
+          const itemsFor=(type,...cls)=>{
+            const cg={},pg={};
+            curTx.filter(t=>t.type===type&&cls.includes(getCls(t))).forEach(t=>{const n=getCatName(t);cg[n]=(cg[n]||0)+t.amount;});
+            prevTx.filter(t=>t.type===type&&cls.includes(getCls(t))).forEach(t=>{const n=getCatName(t);pg[n]=(pg[n]||0)+t.amount;});
+            return [...new Set([...Object.keys(cg),...Object.keys(pg)])].map(n=>({n,c:cg[n]||0,p:pg[n]||0})).sort((a,b)=>b.c-a.c);
           };
-          const sRL=scaledDre(_d26.rl,_d25.rl), sLB=scaledDre(_lb26,_lb25), sEB=scaledDre(_d26.ebitda,_d25.ebitda), sEBIT=scaledDre(_d26.ebit,_d25.ebit), sLL=scaledDre(_d26.ll,_d25.ll);
-          const kpis=[
-            { l:'Receita Líquida', v1:sRL.v1,   v2:sRL.v2,   color:'text-blue-700',   bg:'bg-blue-50',    border:'border-blue-200'   },
-            { l:'Lucro Bruto',     v1:sLB.v1,   v2:sLB.v2,   color:'text-green-700',  bg:'bg-green-50',   border:'border-green-200', pct1:((sLB.v1/sRL.v1)*100).toFixed(1)+'%' },
-            { l:'EBITDA',          v1:sEB.v1,   v2:sEB.v2,   color:'text-teal-700',   bg:'bg-teal-50',    border:'border-teal-200',  pct1:((sEB.v1/sRL.v1)*100).toFixed(1)+'%' },
-            { l:'EBIT',            v1:sEBIT.v1, v2:sEBIT.v2, color:'text-indigo-700', bg:'bg-indigo-50',  border:'border-indigo-200',pct1:((sEBIT.v1/sRL.v1)*100).toFixed(1)+'%' },
-            { l:'Lucro Líquido',   v1:sLL.v1,   v2:sLL.v2,   color:'text-emerald-700',bg:'bg-emerald-50', border:'border-emerald-200',pct1:((sLL.v1/sRL.v1)*100).toFixed(1)+'%' },
-          ];
+
+          // ── RECEITA BRUTA
+          const recBruta =sumC(curTx,'INCOME','RECEITA_SERVICO','RECEITA_CONTRATO','OUTRAS_RECEITAS');
+          const recBrutaP=sumC(prevTx,'INCOME','RECEITA_SERVICO','RECEITA_CONTRATO','OUTRAS_RECEITAS');
+          // ── DEDUÇÕES
+          const ded =sumC(curTx,'EXPENSE','IMPOSTO_RECEITA');
+          const dedP=sumC(prevTx,'EXPENSE','IMPOSTO_RECEITA');
+          const recLiq =recBruta-ded;  const recLiqP=recBrutaP-dedP;
+          // ── CSP
+          const csp =sumC(curTx,'EXPENSE','CSP');  const cspP=sumC(prevTx,'EXPENSE','CSP');
+          const lb =recLiq-csp;  const lbP=recLiqP-cspP;
+          // ── DESPESAS OPERACIONAIS
+          const dPes=sumC(curTx,'EXPENSE','DESPESA_PESSOAL');     const dPesP=sumC(prevTx,'EXPENSE','DESPESA_PESSOAL');
+          const dAdm=sumC(curTx,'EXPENSE','DESPESA_ADMINISTRATIVA');const dAdmP=sumC(prevTx,'EXPENSE','DESPESA_ADMINISTRATIVA');
+          const dCom=sumC(curTx,'EXPENSE','DESPESA_COMERCIAL');   const dComP=sumC(prevTx,'EXPENSE','DESPESA_COMERCIAL');
+          const totOp=dPes+dAdm+dCom; const totOpP=dPesP+dAdmP+dComP;
+          const ebit=lb-totOp;  const ebitP=lbP-totOpP;
+          // ── DEPRECIAÇÃO / EBITDA
+          const da=sumC(curTx,'EXPENSE','DEPRECIACAO'); const daP=sumC(prevTx,'EXPENSE','DEPRECIACAO');
+          const ebitda=ebit+da; const ebitdaP=ebitP+daP;
+          // ── RESULTADO FINANCEIRO
+          const rFin=sumC(curTx,'INCOME','RECEITA_FINANCEIRA');   const rFinP=sumC(prevTx,'INCOME','RECEITA_FINANCEIRA');
+          const dFin=sumC(curTx,'EXPENSE','DESPESA_FINANCEIRA');  const dFinP=sumC(prevTx,'EXPENSE','DESPESA_FINANCEIRA');
+          const resFinLiq=rFin-dFin; const resFinLiqP=rFinP-dFinP;
+          // ── LAIR / IR / LL
+          const lair=ebit+resFinLiq; const lairP=ebitP+resFinLiqP;
+          const ir=sumC(curTx,'EXPENSE','IMPOSTO_RENDA'); const irP=sumC(prevTx,'EXPENSE','IMPOSTO_RENDA');
+          const ll=lair-ir; const llP=lairP-irP;
+
+          const hasData=curTx.length>0||prevTx.length>0;
+          const fv=v=>v===0?'—':v<0?`(${fmt(Math.abs(v))})`:fmt(v);
+          const av=(v,base)=>base===0?'—':(v/base*100).toFixed(1)+'%';
+          const vp=(c,p)=>{if(!p)return{l:'—',u:null};const d=((c-p)/Math.abs(p)*100);return{l:(d>0?'+':'')+d.toFixed(1)+'%',u:d>0};};
+
+          const monthOptions=Array.from({length:13},(_,i)=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);return d.toISOString().slice(0,7);});
+
+          // Row components
+          const HR=({l})=>(<tr className="bg-gray-100 border-t-2 border-gray-300"><td colSpan="5" className="px-4 py-2 text-xs font-bold text-gray-500 uppercase tracking-wider">{l}</td></tr>);
+          const SubHR=({l})=>(<tr className="bg-gray-50 border-t border-gray-200"><td colSpan="5" className="px-4 py-1.5 text-xs font-semibold text-gray-500 pl-6">{l}</td></tr>);
+          const IR2=({l,c,p,neg=false,ind=1})=>{
+            const {l:vl,u}=vp(c,p); const pl=ind===1?'pl-8':'pl-12';
+            const cv=neg?`(${fv(c)})`:fv(c); const pv2=neg?`(${fv(p)})`:fv(p);
+            return(<tr className="hover:bg-gray-50 border-t border-gray-100">
+              <td className={`px-4 py-2 text-xs text-gray-500 ${pl}`}>{l}</td>
+              <td className={`px-4 py-2 text-xs text-right ${neg?'text-red-500':'text-gray-700'}`}>{cv}</td>
+              <td className="px-4 py-2 text-xs text-gray-300 text-right">—</td>
+              <td className={`px-3 py-2 text-xs text-center font-medium ${vl==='—'?'text-gray-300':u===null?'text-gray-400':(neg?(u?'text-red-500':'text-green-600'):(u?'text-green-600':'text-red-500'))}`}>{vl}</td>
+              <td className={`px-4 py-2 text-xs text-right ${neg?'text-red-400':'text-gray-500'}`}>{pv2}</td>
+            </tr>);
+          };
+          const STR=({l,c,p,base=recLiq,neg=false})=>{
+            const {l:vl,u}=vp(c,p); const cv=neg?`(${fv(c)})`:fv(c); const pv2=neg?`(${fv(p)})`:fv(p);
+            return(<tr className="bg-gray-50 border-t border-gray-200">
+              <td className="px-4 py-2.5 text-xs font-semibold text-gray-700 pl-6">{l}</td>
+              <td className={`px-4 py-2.5 text-xs font-semibold text-right ${neg?'text-red-600':'text-gray-800'}`}>{cv}</td>
+              <td className="px-4 py-2.5 text-xs text-gray-400 text-right">{base>0?av(c,base):'—'}</td>
+              <td className={`px-3 py-2.5 text-xs font-semibold text-center ${vl==='—'?'text-gray-300':(u?'text-green-600':'text-red-500')}`}>{vl}</td>
+              <td className={`px-4 py-2.5 text-xs font-medium text-right ${neg?'text-red-500':'text-gray-600'}`}>{pv2}</td>
+            </tr>);
+          };
+          const RR=({l,c,p,base=recLiq,hl='green'})=>{
+            const {l:vl,u}=vp(c,p); const pos=c>=0;
+            const s={green:{bg:pos?'bg-green-50':'bg-red-50',tc:pos?'text-green-900':'text-red-800',vc:pos?'text-green-800':'text-red-700',vp2:pos?'text-green-700':'text-red-600'},blue:{bg:'bg-blue-50',tc:'text-blue-900',vc:'text-blue-800',vp2:'text-blue-600'},navy:{bg:'bg-blue-700',tc:'text-white',vc:'text-white',vp2:'text-blue-200'}};
+            const C=s[hl]||s.green;
+            return(<tr className={`border-t-2 border-gray-200 ${C.bg}`}>
+              <td className={`px-4 py-3 text-sm font-bold ${C.tc}`}>{l}</td>
+              <td className={`px-4 py-3 text-sm font-bold text-right ${C.vc}`}>{fv(c)}</td>
+              <td className={`px-4 py-3 text-xs text-right font-medium ${C.vc}`}>{base>0?av(c,base):'—'}</td>
+              <td className={`px-3 py-3 text-xs font-bold text-center ${vl==='—'?'text-gray-300':(u?'text-green-500':'text-red-400')}`}>{vl}</td>
+              <td className={`px-4 py-3 text-sm font-semibold text-right ${C.vp2}`}>{fv(p)}</td>
+            </tr>);
+          };
+
           return (
             <div className="space-y-4">
-              {/* KPI Cards */}
+              {/* KPI cards */}
+              {hasData&&(
               <div className="grid grid-cols-5 gap-3">
-                {kpis.map((k,i)=>{
-                  const {pct,up}=vp(k.v1,k.v2);
-                  return (
-                    <div key={i} className={`${k.bg} border ${k.border} rounded-xl p-3`}>
-                      <p className="text-xs text-gray-500 mb-1">{k.l}</p>
-                      <p className={`text-base font-bold ${k.color}`}>{fmt(k.v1)}</p>
-                      {k.pct1&&<p className="text-xs text-gray-500 mt-0.5">Margem: <span className="font-semibold">{k.pct1}</span></p>}
-                      <p className={`text-xs mt-1 font-medium ${up?'text-green-600':'text-red-500'}`}>{pct} vs {_prevLabel}</p>
-                    </div>
-                  );
-                })}
+                {[
+                  {l:'Receita Líquida',c:recLiq, p:recLiqP, bg:'bg-blue-50',   bdr:'border-blue-200',   tc:'text-blue-700'},
+                  {l:'Lucro Bruto',    c:lb,     p:lbP,     bg:'bg-green-50',  bdr:'border-green-200',  tc:'text-green-700',  mg:recLiq>0?av(lb,recLiq):'—'},
+                  {l:'EBIT',          c:ebit,   p:ebitP,   bg:'bg-indigo-50', bdr:'border-indigo-200', tc:'text-indigo-700', mg:recLiq>0?av(ebit,recLiq):'—'},
+                  {l:'EBITDA',        c:ebitda, p:ebitdaP, bg:'bg-teal-50',   bdr:'border-teal-200',   tc:'text-teal-700',   mg:recLiq>0?av(ebitda,recLiq):'—'},
+                  {l:'Lucro Líquido', c:ll,     p:llP,     bg:'bg-emerald-50',bdr:'border-emerald-200',tc:'text-emerald-700',mg:recLiq>0?av(ll,recLiq):'—'},
+                ].map((k,i)=>{const {l:vl,u}=vp(k.c,k.p); return(
+                  <div key={i} className={`${k.bg} border ${k.bdr} rounded-xl p-3`}>
+                    <p className="text-xs text-gray-500 mb-1">{k.l}</p>
+                    <p className={`text-base font-bold ${k.tc}`}>{fv(k.c)}</p>
+                    {k.mg&&<p className="text-xs text-gray-400 mt-0.5">Margem: <span className={`font-semibold ${k.tc}`}>{k.mg}</span></p>}
+                    <p className={`text-xs mt-1 font-medium ${vl==='—'?'text-gray-400':u?'text-green-600':'text-red-500'}`}>{vl} vs {prevLabel}</p>
+                  </div>
+                );})}
               </div>
+              )}
 
-              {/* DRE Table */}
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                 <div className="px-5 py-3.5 border-b border-gray-100 flex flex-wrap gap-3 items-center bg-gray-50">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-sm font-bold text-gray-800">DRE Gerencial — Demonstração do Resultado do Exercício</h3>
-                      <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${_tr.color}`}>{_tr.label}</span>
-                    </div>
-                    <p className="text-xs text-gray-400 mt-0.5">{_dp.label} × {(DRE_PERIODS[_prevKey]||{label:_prevKey+' (anterior)'}).label} · Valores em R$</p>
+                    <h3 className="text-sm font-bold text-gray-800">DRE — Demonstração do Resultado do Exercício</h3>
+                    <p className="text-xs text-gray-400 mt-0.5">{curLabel} × {prevLabel} · Regime de Competência · CPC 26 · Valores em R$</p>
                   </div>
                   <select value={drePeriod} onChange={e=>setDrePeriod(e.target.value)}
                     className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400">
-                    {Object.entries(DRE_PERIODS).map(([k,p])=><option key={k} value={k}>{p.label}</option>)}
+                    {monthOptions.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}
                   </select>
-                  <button onClick={()=>setToast('DRE exportada como PDF!')} className="text-xs text-blue-600 border border-blue-200 px-3 py-1.5 rounded-lg hover:bg-blue-50 font-medium">↓ Exportar PDF</button>
                 </div>
+                {!hasData?(
+                  <div className="px-5 py-12 text-center">
+                    <p className="text-4xl mb-3">📋</p>
+                    <p className="text-sm font-medium text-gray-600">Nenhum lançamento em {curLabel}</p>
+                    <p className="text-xs text-gray-400 mt-1">Adicione receitas e despesas usando as categorias classificadas para gerar a DRE</p>
+                  </div>
+                ):(
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-gray-100 border-b-2 border-gray-300">
-                        <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Descrição</th>
-                        <th className="px-4 py-2.5 text-right text-xs font-semibold text-blue-700 uppercase tracking-wide whitespace-nowrap">{_curLabel}</th>
-                        <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">AV%</th>
-                        <th className="px-3 py-2.5 text-center text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">Var%</th>
-                        <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{_prevLabel}</th>
-                        <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">AV%</th>
-                      </tr>
-                    </thead>
+                    <thead><tr className="bg-gray-100 border-b-2 border-gray-300">
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide">Descrição</th>
+                      <th className="px-4 py-2.5 text-right text-xs font-semibold text-blue-700 uppercase tracking-wide whitespace-nowrap">{curLabel}</th>
+                      <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">AV%</th>
+                      <th className="px-3 py-2.5 text-center text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">Var%</th>
+                      <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{prevLabel}</th>
+                    </tr></thead>
                     <tbody>
-                      {scaledRows.map((r,i)=>{
-                        if(r.t==='header') return (
-                          <tr key={i} className="bg-gray-100 border-t-2 border-gray-300">
-                            <td colSpan="6" className="px-4 py-2 text-xs font-bold text-gray-500 uppercase tracking-wider">{r.l}</td>
-                          </tr>
-                        );
-                        const {pct,up}=vp(r.v1,r.v2);
-                        const varCls=pct==='—'?'text-gray-300':up===null?'text-gray-400':(r.v1<0?(up?'text-red-500':'text-green-600'):(up?'text-green-600':'text-red-500'));
-                        if(r.t==='grand') return (
-                          <tr key={i} className="bg-blue-700 border-t-2 border-blue-900">
-                            <td className="px-4 py-3.5 text-sm font-bold text-white">{r.l}</td>
-                            <td className="px-4 py-3.5 text-sm font-bold text-white text-right whitespace-nowrap">{fv(r.v1)}</td>
-                            <td className="px-4 py-3.5 text-xs text-blue-200 text-right">{r.margin?av(r.v1,rl1s):'—'}</td>
-                            <td className="px-3 py-3.5 text-xs font-bold text-blue-200 text-center whitespace-nowrap">{pct}</td>
-                            <td className="px-4 py-3.5 text-sm font-semibold text-blue-100 text-right whitespace-nowrap">{fv(r.v2)}</td>
-                            <td className="px-4 py-3.5 text-xs text-blue-300 text-right">{r.margin?av(r.v2,rl2s):'—'}</td>
-                          </tr>
-                        );
-                        if(r.t==='result') return (
-                          <tr key={i} className={`border-t-2 border-green-200 ${r.v1<0?'bg-red-50':'bg-green-50'}`}>
-                            <td className={`px-4 py-3 text-sm font-bold ${r.v1<0?'text-red-800':'text-green-900'}`}>{r.l}</td>
-                            <td className={`px-4 py-3 text-sm font-bold text-right whitespace-nowrap ${r.v1<0?'text-red-700':'text-green-800'}`}>{fv(r.v1)}</td>
-                            <td className="px-4 py-3 text-xs text-gray-500 text-right font-medium">{r.margin?av(r.v1,rl1s):'—'}</td>
-                            <td className={`px-3 py-3 text-xs font-bold text-center whitespace-nowrap ${varCls}`}>{pct}</td>
-                            <td className={`px-4 py-3 text-sm font-semibold text-right whitespace-nowrap ${r.v2<0?'text-red-600':'text-green-700'}`}>{fv(r.v2)}</td>
-                            <td className="px-4 py-3 text-xs text-gray-400 text-right">{r.margin?av(r.v2,rl2s):'—'}</td>
-                          </tr>
-                        );
-                        if(r.t==='subtotal') return (
-                          <tr key={i} className="bg-gray-50 border-t border-gray-200">
-                            <td className="px-4 py-2.5 text-xs font-semibold text-gray-700 pl-6">{r.l}</td>
-                            <td className={`px-4 py-2.5 text-xs font-semibold text-right whitespace-nowrap ${r.v1<0?'text-red-600':'text-gray-800'}`}>{fv(r.v1)}</td>
-                            <td className="px-4 py-2.5 text-xs text-gray-400 text-right">{av(r.v1,rl1s)}</td>
-                            <td className={`px-3 py-2.5 text-xs font-semibold text-center whitespace-nowrap ${varCls}`}>{pct}</td>
-                            <td className={`px-4 py-2.5 text-xs font-medium text-right whitespace-nowrap ${r.v2<0?'text-red-500':'text-gray-600'}`}>{fv(r.v2)}</td>
-                            <td className="px-4 py-2.5 text-xs text-gray-400 text-right">{av(r.v2,rl2s)}</td>
-                          </tr>
-                        );
-                        return (
-                          <tr key={i} className="hover:bg-gray-50 border-t border-gray-100">
-                            <td className="px-4 py-2 text-xs text-gray-500 pl-8">{r.l}</td>
-                            <td className={`px-4 py-2 text-xs text-right whitespace-nowrap ${r.v1<0?'text-red-500':'text-gray-700'}`}>{fv(r.v1)}</td>
-                            <td className="px-4 py-2 text-xs text-gray-300 text-right">{av(r.v1,rl1s)}</td>
-                            <td className={`px-3 py-2 text-xs text-center whitespace-nowrap ${varCls}`}>{pct}</td>
-                            <td className={`px-4 py-2 text-xs text-right whitespace-nowrap ${r.v2<0?'text-red-400':'text-gray-500'}`}>{fv(r.v2)}</td>
-                            <td className="px-4 py-2 text-xs text-gray-300 text-right">{av(r.v2,rl2s)}</td>
-                          </tr>
-                        );
-                      })}
+                      {/* RECEITA BRUTA */}
+                      <HR l="Receita Bruta de Serviços"/>
+                      {itemsFor('INCOME','RECEITA_SERVICO','RECEITA_CONTRATO','OUTRAS_RECEITAS').map(({n,c,p})=><IR2 key={n} l={n} c={c} p={p}/>)}
+                      {recBruta===0&&<tr className="border-t border-gray-100"><td colSpan="5" className="px-4 py-2 text-xs text-gray-400 pl-8">Nenhuma receita — adicione lançamentos com categorias de receita</td></tr>}
+                      <STR l="(=) Receita Bruta Total" c={recBruta} p={recBrutaP} base={recBruta}/>
+
+                      {/* DEDUÇÕES */}
+                      {(ded>0||dedP>0)&&<><HR l="(-) Deduções da Receita Bruta (Impostos sobre Receita)"/>
+                        {itemsFor('EXPENSE','IMPOSTO_RECEITA').map(({n,c,p})=><IR2 key={n} l={n} c={c} p={p} neg/>)}
+                        <STR l="Total Deduções" c={ded} p={dedP} base={recBruta} neg/></>}
+
+                      {/* RECEITA LÍQUIDA */}
+                      <RR l="(=) RECEITA LÍQUIDA DE SERVIÇOS" c={recLiq} p={recLiqP} base={recLiq} hl="blue"/>
+
+                      {/* CSP */}
+                      {(csp>0||cspP>0)&&<><HR l="(-) Custo dos Serviços Prestados (CSP)"/>
+                        {itemsFor('EXPENSE','CSP').map(({n,c,p})=><IR2 key={n} l={n} c={c} p={p} neg/>)}
+                        <STR l="Total CSP" c={csp} p={cspP} neg/></>}
+
+                      {/* LUCRO BRUTO */}
+                      <RR l="(=) LUCRO BRUTO" c={lb} p={lbP} hl="green"/>
+
+                      {/* DESPESAS OPERACIONAIS */}
+                      {(totOp>0||totOpP>0)&&<><HR l="(-) Despesas Operacionais"/>
+                        {(dPes>0||dPesP>0)&&<><SubHR l="Despesas com Pessoal"/>
+                          {itemsFor('EXPENSE','DESPESA_PESSOAL').map(({n,c,p})=><IR2 key={n} l={n} c={c} p={p} ind={2} neg/>)}
+                          <STR l="Subtotal Pessoal" c={dPes} p={dPesP} neg/></>}
+                        {(dAdm>0||dAdmP>0)&&<><SubHR l="Despesas Gerais e Administrativas (G&A)"/>
+                          {itemsFor('EXPENSE','DESPESA_ADMINISTRATIVA').map(({n,c,p})=><IR2 key={n} l={n} c={c} p={p} ind={2} neg/>)}
+                          <STR l="Subtotal G&A" c={dAdm} p={dAdmP} neg/></>}
+                        {(dCom>0||dComP>0)&&<><SubHR l="Despesas Comerciais"/>
+                          {itemsFor('EXPENSE','DESPESA_COMERCIAL').map(({n,c,p})=><IR2 key={n} l={n} c={c} p={p} ind={2} neg/>)}
+                          <STR l="Subtotal Comercial" c={dCom} p={dComP} neg/></>}
+                        <STR l="(=) Total Despesas Operacionais" c={totOp} p={totOpP} neg/></>}
+
+                      {/* EBIT */}
+                      <RR l="(=) EBIT — Resultado Operacional" c={ebit} p={ebitP} hl="green"/>
+
+                      {/* EBITDA */}
+                      {(da>0||daP>0)&&<><HR l="EBITDA — Ajuste D&A"/>
+                        {itemsFor('EXPENSE','DEPRECIACAO').map(({n,c,p})=><IR2 key={n} l={`(+) D&A add-back — ${n}`} c={c} p={p}/>)}
+                        <RR l="(=) EBITDA" c={ebitda} p={ebitdaP} hl="blue"/></>}
+
+                      {/* RESULTADO FINANCEIRO */}
+                      {(rFin>0||dFin>0||rFinP>0||dFinP>0)&&<><HR l="(+/-) Resultado Financeiro"/>
+                        {(rFin>0||rFinP>0)&&<IR2 l="(+) Receitas Financeiras (CDB/Aplicações)" c={rFin} p={rFinP}/>}
+                        {itemsFor('EXPENSE','DESPESA_FINANCEIRA').map(({n,c,p})=><IR2 key={n} l={n} c={c} p={p} neg/>)}
+                        <STR l="Resultado Financeiro Líquido" c={resFinLiq} p={resFinLiqP} neg={resFinLiq<0}/></>}
+
+                      {/* LAIR */}
+                      <RR l="(=) LAIR — Lucro Antes do IR e CSLL" c={lair} p={lairP} hl="green"/>
+
+                      {/* IR / CSLL */}
+                      {(ir>0||irP>0)&&<><HR l="(-) Impostos sobre o Lucro (IR e CSLL)"/>
+                        {itemsFor('EXPENSE','IMPOSTO_RENDA').map(({n,c,p})=><IR2 key={n} l={n} c={c} p={p} neg/>)}
+                        <STR l="Total IR e CSLL" c={ir} p={irP} neg/></>}
+
+                      {/* LUCRO LÍQUIDO */}
+                      <tr className={`border-t-2 ${ll>=0?'bg-blue-700':'bg-red-700'}`}>
+                        <td className="px-4 py-3.5 text-sm font-bold text-white">(=) LUCRO LÍQUIDO DO EXERCÍCIO</td>
+                        <td className="px-4 py-3.5 text-sm font-bold text-white text-right">{fv(ll)}</td>
+                        <td className={`px-4 py-3.5 text-xs text-right ${ll>=0?'text-blue-200':'text-red-200'}`}>{recLiq>0?av(ll,recLiq):'—'}</td>
+                        <td className={`px-3 py-3.5 text-xs font-bold text-center ${vp(ll,llP).u?'text-green-300':'text-red-300'}`}>{vp(ll,llP).l}</td>
+                        <td className={`px-4 py-3.5 text-sm font-semibold text-right ${ll>=0?'text-blue-200':'text-red-200'}`}>{fv(llP)}</td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>
+                )}
               </div>
             </div>
           );
@@ -3909,7 +3948,7 @@ const FleetPage = () => {
 
 // ─── SETTINGS ─────────────────────────────────────────────────────────────────
 
-const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, expenseCats=[], setExpenseCats, bankAccounts=[], setBankAccounts, payMethods=[], setPayMethods }) => {
+const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, expenseCats=[], setExpenseCats, bankAccounts=[], setBankAccounts, payMethods=[], setPayMethods, permissions=DEFAULT_PERMISSIONS, savePermissions }) => {
   const [tab, setTab] = useState('company');
   const [company, setCompany] = useState({ name:'Opticom Telecom', cnpj:'04.176.164/0001-25', email:'contato@opticom.com.br', phone:'(17) 3212-5000', address:'Rua das Telecomunicações, 100', city:'São José do Rio Preto — SP', cep:'15000-000', plan:'PROFESSIONAL' });
   const [users, setUsers] = useState([]);
@@ -3923,6 +3962,12 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
   const [newCatType, setNewCatType] = useState('income');
   const [newBank,    setNewBank]    = useState({ bank:'', agency:'', account:'', type:'Corrente' });
   const [newPay,     setNewPay]     = useState('');
+  // Contas e Saldos tab state
+  const [initBalEdit, setInitBalEdit] = useState({});
+  const [savingBal,   setSavingBal]   = useState({});
+  const [investList,  setInvestList]  = useState([]);
+  const [investLoading, setInvestLoading] = useState(false);
+  const [newInvest, setNewInvest] = useState({ description:'', amount:'', due_date: new Date().toISOString().split('T')[0], bank_account_id:'' });
 
   useEffect(() => {
     api.getUsers().then(r => {
@@ -3930,6 +3975,49 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
       else setUsers([]);
     });
   }, []);
+
+  useEffect(() => {
+    if (tab !== 'accounts') return;
+    setInvestLoading(true);
+    api.getTransactions().then(r => {
+      if (r.success) {
+        const txs = r.data?.data || r.data || [];
+        const investCatIds = new Set(expenseCats.filter(c=>c.accounting_class==='INVESTIMENTO').map(c=>c.id));
+        setInvestList(txs.filter(t=>t.type==='EXPENSE'&&investCatIds.has(t.category_id)).slice(0,30));
+      }
+      setInvestLoading(false);
+    });
+  }, [tab]);
+
+  const saveInitBal = async (id) => {
+    const raw = (initBalEdit[id]!==undefined ? initBalEdit[id] : '').replace(',','.').replace(/[^0-9.]/g,'');
+    const val = Math.round(parseFloat(raw||'0')*100);
+    if (isNaN(val)) { setToast('Valor inválido'); return; }
+    setSavingBal(p=>({...p,[id]:true}));
+    const r = await api.updateBankAccount(id, { initial_balance: val });
+    setSavingBal(p=>({...p,[id]:false}));
+    if (r.success) {
+      setBankAccounts(p=>p.map(b=>b.id===id?{...b,initial_balance:val}:b));
+      setToast('Saldo inicial salvo!');
+    } else { setToast(r.error||'Erro ao salvar saldo'); }
+  };
+
+  const addInvestment = async () => {
+    if (!newInvest.description||!newInvest.amount||!newInvest.due_date) { setToast('Preencha descrição, valor e data'); return; }
+    const investCat = expenseCats.find(c=>c.accounting_class==='INVESTIMENTO');
+    if (!investCat) { setToast('Nenhuma categoria de Investimento cadastrada'); return; }
+    const amount = Math.round(parseFloat(newInvest.amount.replace(',','.'))*100);
+    if (isNaN(amount)||amount<=0) { setToast('Valor inválido'); return; }
+    const payload = { type:'EXPENSE', description:newInvest.description, amount, due_date:newInvest.due_date, category_id:investCat.id, status:'PENDING' };
+    if (newInvest.bank_account_id) payload.bank_account_id = newInvest.bank_account_id;
+    const r = await api.createTransaction(payload);
+    if (r.success) {
+      const tx = r.data?.data||r.data;
+      setInvestList(p=>[tx,...p]);
+      setNewInvest({ description:'', amount:'', due_date:new Date().toISOString().split('T')[0], bank_account_id:'' });
+      setToast('Investimento registrado!');
+    } else { setToast(r.error||'Erro ao registrar'); }
+  };
 
   const saveCompany = () => setToast('Configurações da empresa salvas!');
   const saveSla     = () => setToast('SLAs atualizados!');
@@ -3949,6 +4037,17 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
   };
 
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, name }
+  const [editUserModal, setEditUserModal] = useState(null); // { id, name, email, role }
+
+  const updateUser = async () => {
+    if (!editUserModal) return;
+    const r = await api.updateUser(editUserModal.id, { name: editUserModal.name, role: editUserModal.role });
+    if (r.success) {
+      setUsers(p=>p.map(u=>u.id===editUserModal.id?{...u,name:editUserModal.name,role:editUserModal.role}:u));
+      setEditUserModal(null);
+      setToast('Usuário atualizado!');
+    } else { setToast(r.error||'Erro ao atualizar usuário'); }
+  };
 
   const deactivateUser = async id => {
     const result = await api.deactivateUser(id);
@@ -3967,7 +4066,7 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
   return (
     <div className="p-5 space-y-4">
       <div className="flex gap-1 border-b border-gray-200">
-        {[['company','Empresa'],['tax','Tributação'],['financial','Financeiro'],['users','Usuários'],['notifications','Notificações'],['sla','SLA']].map(([id,lbl])=>(
+        {[['company','Empresa'],['tax','Tributação'],['financial','Financeiro'],['accounts','Contas e Saldos'],['users','Usuários'],['notifications','Notificações'],['sla','SLA']].map(([id,lbl])=>(
           <button key={id} onClick={()=>setTab(id)} className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${tab===id?'border-blue-600 text-blue-600':'border-transparent text-gray-500 hover:text-gray-700'}`}>{lbl}</button>
         ))}
       </div>
@@ -4223,6 +4322,99 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
         );
       })()}
 
+      {tab==='accounts'&&(
+        <div className="space-y-4">
+          {/* Saldo Inicial das Contas */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold text-gray-800">Saldo Inicial das Contas Bancárias</h3>
+              <p className="text-xs text-gray-400 mt-0.5">O saldo inicial é usado no DFC para calcular o Saldo Final Projetado de Caixa</p>
+            </div>
+            {bankAccounts.length===0
+              ?<p className="text-sm text-gray-400 text-center py-6">Nenhuma conta bancária cadastrada</p>
+              :<div className="space-y-3">
+                {bankAccounts.map(b=>{
+                  const cur = initBalEdit[b.id]!==undefined ? initBalEdit[b.id] : ((b.initial_balance||0)/100).toFixed(2).replace('.',',');
+                  return(
+                  <div key={b.id} className="flex items-center gap-4 p-3 rounded-xl border border-gray-200 bg-gray-50">
+                    <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs shrink-0">{(b.bank_name||b.name||'?')[0]}</div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-gray-800">{b.name}</p>
+                      <p className="text-xs text-gray-400">{b.bank_name||'—'}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-500">R$</span>
+                      <input
+                        value={cur}
+                        onChange={e=>setInitBalEdit(p=>({...p,[b.id]:e.target.value}))}
+                        className="w-32 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="0,00"/>
+                      <button onClick={()=>saveInitBal(b.id)} disabled={savingBal[b.id]}
+                        className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                        {savingBal[b.id]?'...':'Salvar'}
+                      </button>
+                    </div>
+                  </div>
+                  );
+                })}
+              </div>
+            }
+          </div>
+
+          {/* Investimentos */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold text-gray-800">Registrar Investimento</h3>
+              <p className="text-xs text-gray-400 mt-0.5">Compra de equipamentos, veículos, infraestrutura — lançado como despesa de Investimento no DFC</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div className="col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Descrição *</label>
+                <input value={newInvest.description} onChange={e=>setNewInvest(p=>({...p,description:e.target.value}))}
+                  placeholder="Ex: Compra de veículo Fiorino 2024" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Valor (R$) *</label>
+                <input value={newInvest.amount} onChange={e=>setNewInvest(p=>({...p,amount:e.target.value}))}
+                  placeholder="0,00" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Data *</label>
+                <input type="date" value={newInvest.due_date} onChange={e=>setNewInvest(p=>({...p,due_date:e.target.value}))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Conta Bancária</label>
+                <select value={newInvest.bank_account_id} onChange={e=>setNewInvest(p=>({...p,bank_account_id:e.target.value}))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none">
+                  <option value="">Selecionar conta...</option>
+                  {bankAccounts.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <button onClick={addInvestment} className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Registrar Investimento</button>
+
+            {/* Lista de investimentos */}
+            <div className="mt-5 border-t border-gray-100 pt-4">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Histórico de Investimentos</p>
+              {investLoading
+                ?<p className="text-sm text-gray-400 text-center py-4">Carregando...</p>
+                :investList.length===0
+                  ?<p className="text-sm text-gray-400 text-center py-4">Nenhum investimento registrado</p>
+                  :<div className="space-y-2">
+                    {investList.map(t=>(
+                      <div key={t.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50">
+                        <div><p className="text-sm font-medium text-gray-800">{t.description}</p><p className="text-xs text-gray-400">{fmtDate(t.due_date)}</p></div>
+                        <div className="text-right"><p className="text-sm font-bold text-red-700">{fmt(t.amount)}</p><Badge status={t.status}/></div>
+                      </div>
+                    ))}
+                  </div>
+              }
+            </div>
+          </div>
+        </div>
+      )}
+
       {tab==='users'&&(
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -4242,6 +4434,7 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
                     <td className="px-4 py-3"><Badge status={u.status}/></td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
+                        <button onClick={()=>setEditUserModal({id:u.id,name:u.name,email:u.email,role:u.role})} className="text-xs text-blue-600 hover:underline">Editar</button>
                         {u.status==='ACTIVE'&&u.id!==api.user?.id&&<button onClick={()=>deactivateUser(u.id)} className="text-xs text-amber-600 hover:underline">Desativar</button>}
                         {u.id!==api.user?.id&&<button onClick={()=>setDeleteConfirm({id:u.id,name:u.name})} className="text-xs text-red-500 hover:underline">Excluir</button>}
                         {u.id===api.user?.id&&<span className="text-xs text-gray-300">você</span>}
@@ -4284,6 +4477,88 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
               </div>
             </div>
           </Modal>
+
+          <Modal open={!!editUserModal} onClose={()=>setEditUserModal(null)} title="Editar Usuário" size="sm">
+            {editUserModal&&(
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+                  <input value={editUserModal.name} onChange={e=>setEditUserModal(p=>({...p,name:e.target.value}))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">E-mail</label>
+                  <input value={editUserModal.email} disabled className="w-full border border-gray-100 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-400 cursor-not-allowed"/>
+                  <p className="text-xs text-gray-400 mt-1">O e-mail não pode ser alterado por aqui</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Perfil</label>
+                  <select value={editUserModal.role} onChange={e=>setEditUserModal(p=>({...p,role:e.target.value}))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none">
+                    <option value="ADMIN">Administrador</option>
+                    <option value="MANAGER">Gerente</option>
+                    <option value="TECHNICIAN">Técnico</option>
+                  </select>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <button onClick={()=>setEditUserModal(null)} className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
+                  <button onClick={updateUser} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Salvar</button>
+                </div>
+              </div>
+            )}
+          </Modal>
+
+          {/* Matriz de Permissões */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800">Permissões por Perfil</h3>
+                <p className="text-xs text-gray-400 mt-0.5">Defina quais módulos cada perfil pode acessar. Administrador tem acesso total.</p>
+              </div>
+              <button onClick={()=>savePermissions&&savePermissions({...DEFAULT_PERMISSIONS})} className="px-4 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-50">Redefinir Padrões</button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="pb-2 text-left text-xs font-semibold text-gray-500 w-48">Módulo</th>
+                    <th className="pb-2 text-center text-xs font-semibold text-gray-400 w-28">ADMIN<br/><span className="text-xs font-normal text-gray-300">sempre total</span></th>
+                    <th className="pb-2 text-center text-xs font-semibold text-blue-600 w-28">GERENTE</th>
+                    <th className="pb-2 text-center text-xs font-semibold text-green-600 w-28">TÉCNICO</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {MENU.map(m=>{
+                    const managerHas = (permissions.MANAGER||[]).includes(m.id);
+                    const techHas    = (permissions.TECHNICIAN||[]).includes(m.id);
+                    const toggle = (role,id) => {
+                      const cur = permissions[role]||[];
+                      const next = cur.includes(id) ? cur.filter(x=>x!==id) : [...cur,id];
+                      savePermissions&&savePermissions({...permissions,[role]:next});
+                    };
+                    return(
+                    <tr key={m.id} className="hover:bg-gray-50">
+                      <td className="py-2.5 text-gray-700 font-medium">{m.label}</td>
+                      <td className="py-2.5 text-center"><span className="text-gray-300 text-lg">✓</span></td>
+                      <td className="py-2.5 text-center">
+                        <button onClick={()=>toggle('MANAGER',m.id)}
+                          className={`w-9 h-5 rounded-full transition-colors relative ${managerHas?'bg-blue-500':'bg-gray-200'}`}>
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${managerHas?'left-4':'left-0.5'}`}/>
+                        </button>
+                      </td>
+                      <td className="py-2.5 text-center">
+                        <button onClick={()=>toggle('TECHNICIAN',m.id)}
+                          className={`w-9 h-5 rounded-full transition-colors relative ${techHas?'bg-green-500':'bg-gray-200'}`}>
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${techHas?'left-4':'left-0.5'}`}/>
+                        </button>
+                      </td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 
@@ -4421,6 +4696,12 @@ function App() {
   const [collapsed, setCollapsed] = useState(false);
   // Regime tributário global — propagado por toda a aplicação
   const [taxRegime, setTaxRegime] = useState(() => localStorage.getItem('opticom_taxRegime') || 'REAL');
+  // Permissões por perfil
+  const [permissions, setPermissions] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('opticom_permissions')) || DEFAULT_PERMISSIONS; }
+    catch { return DEFAULT_PERMISSIONS; }
+  });
+  const savePermissions = p => { setPermissions(p); localStorage.setItem('opticom_permissions', JSON.stringify(p)); };
   // Configurações financeiras globais
   const [incomeCats,  setIncomeCats]  = useState(INCOME_CATS_INIT);
   const [expenseCats, setExpenseCats] = useState(EXPENSE_CATS_INIT);
@@ -4470,6 +4751,11 @@ function App() {
   if (!loggedIn) return <LoginPage onLogin={()=>{ setUser(api.user); setLoggedIn(true); }}/>;
 
   const renderPage = () => {
+    const role = user?.role || 'TECHNICIAN';
+    const allowed = new Set((permissions||DEFAULT_PERMISSIONS)[role] || []);
+    if (page !== 'dashboard' && !allowed.has(page)) {
+      return <div className="p-10 text-center"><p className="text-gray-400 text-sm">Você não tem permissão para acessar esta página.</p><button onClick={()=>setPage('dashboard')} className="mt-4 text-blue-600 text-sm hover:underline">← Voltar ao Dashboard</button></div>;
+    }
     switch(page) {
       case 'dashboard':   return <DashboardPage setPage={setPage} taxRegime={taxRegime}/>;
       case 'orders':      return <OrdersPage taxRegime={taxRegime}/>;
@@ -4479,7 +4765,7 @@ function App() {
       case 'inventory':   return <InventoryPage/>;
       case 'technicians': return <TechniciansPage/>;
       case 'fleet':       return <FleetPage/>;
-      case 'settings':    return <SettingsPage taxRegime={taxRegime} setTaxRegime={setTaxRegime} incomeCats={incomeCats} setIncomeCats={setIncomeCats} expenseCats={expenseCats} setExpenseCats={setExpenseCats} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} payMethods={payMethods} setPayMethods={setPayMethods}/>;
+      case 'settings':    return <SettingsPage taxRegime={taxRegime} setTaxRegime={setTaxRegime} incomeCats={incomeCats} setIncomeCats={setIncomeCats} expenseCats={expenseCats} setExpenseCats={setExpenseCats} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} payMethods={payMethods} setPayMethods={setPayMethods} permissions={permissions} savePermissions={savePermissions}/>;
       default:            return <div className="p-10 text-center text-gray-400">Módulo não encontrado</div>;
     }
   };
@@ -4487,7 +4773,7 @@ function App() {
   const regime = TAX_REGIMES[taxRegime];
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} user={user}/>
+      <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} user={user} permissions={permissions}/>
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header page={page} onLogout={()=>setLoggedIn(false)} setPage={setPage} regime={regime} user={user}/>
         <main className="flex-1 overflow-y-auto bg-gray-50">

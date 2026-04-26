@@ -299,6 +299,18 @@ class OpticomAPI {
     return this._fetch('/bank-accounts');
   }
 
+  async createBankAccount(data) {
+    return this._fetch('/bank-accounts', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async updateBankAccount(id, data) {
+    return this._fetch(`/bank-accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  async deleteBankAccount(id) {
+    return this._fetch(`/bank-accounts/${id}`, { method: 'DELETE' });
+  }
+
   // === Métodos de Pagamento ===
   async getPaymentMethods() {
     return this._fetch('/payment-methods');
