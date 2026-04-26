@@ -1,4 +1,5 @@
 const express = require('express');
+const bcrypt   = require('bcrypt');
 const supabase = require('../../config/supabase');
 const checkRole = require('../middleware/rbac');
 
@@ -26,6 +27,9 @@ router.put('/:id', checkRole('ADMIN'), async (req, res) => {
     ['role', 'status', 'name'].forEach(f => {
       if (req.body.hasOwnProperty(f)) allowed[f] = req.body[f];
     });
+    if (req.body.password) {
+      allowed.password_hash = await bcrypt.hash(req.body.password, 10);
+    }
 
     const { data, error } = await supabase
       .from('users')

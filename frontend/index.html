@@ -599,10 +599,11 @@ const Header = ({ page, onLogout, setPage, regime, user }) => {
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 
 const LoginPage = ({ onLogin }) => {
-  const [email, setEmail] = useState('joao@opticom.com.br');
+  const [email, setEmail] = useState('');
   const [pass, setPass]   = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [forgotOpen, setForgotOpen] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -674,7 +675,7 @@ const LoginPage = ({ onLogin }) => {
                 <input type="checkbox" defaultChecked className="rounded accent-blue-600"/>
                 Lembrar-me
               </label>
-              <button type="button" className="text-blue-600 hover:underline text-xs">Esqueceu a senha?</button>
+              <button type="button" onClick={()=>setForgotOpen(true)} className="text-blue-600 hover:underline text-xs">Esqueceu a senha?</button>
             </div>
             <button type="submit" disabled={loading}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition-colors disabled:opacity-60 text-sm mt-2">
@@ -687,6 +688,16 @@ const LoginPage = ({ onLogin }) => {
         </div>
       </div>
     </div>
+    {forgotOpen&&(
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={()=>setForgotOpen(false)}>
+        <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 space-y-4 shadow-xl" onClick={e=>e.stopPropagation()}>
+          <h3 className="text-base font-semibold text-gray-800">Redefinir Senha</h3>
+          <p className="text-sm text-gray-600">Para redefinir sua senha, solicite ao administrador do sistema em <strong>Configurações → Usuários → Editar</strong>.</p>
+          <p className="text-sm text-gray-500">O administrador pode definir uma nova senha diretamente pelo painel.</p>
+          <button onClick={()=>setForgotOpen(false)} className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700">Entendido</button>
+        </div>
+      </div>
+    )}
   );
 };
 
@@ -1981,8 +1992,8 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
 
   useEffect(() => { loadFinancialData(); }, []);
   const loadFinancialData = async () => {
-    const [txRes, catRes, baRes, pmRes] = await Promise.all([
-      api.getTransactions(), api.getCategories(), api.getBankAccounts(), api.getPaymentMethods()
+    const [txRes, catRes, baRes, pmRes, techRes] = await Promise.all([
+      api.getTransactions(), api.getCategories(), api.getBankAccounts(), api.getPaymentMethods(), api.getTechnicians()
     ]);
     if (txRes.success)  setTx(txRes.data?.data || txRes.data || []);
     if (catRes.success) {
@@ -1991,17 +2002,20 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
     }
     if (baRes.success)  setBankAccounts(baRes.data?.data || baRes.data || BANK_ACCOUNTS_INIT);
     if (pmRes.success)  setPayMethods(pmRes.data?.data || pmRes.data || PAYMENT_METHODS_INIT);
+    if (techRes.success) setPayTechs(techRes.data?.data || techRes.data || []);
   };
   const [importModal, setImportModal] = useState(null);
   const [importText, setImportText]   = useState('');
   // Folha Salarial — estados no topo (hooks não podem ficar dentro de IIFE)
-  const [payroll,      setPayroll]      = useState(PAYROLL_INIT);
-  const [payrollRef,   setPayrollRef]   = useState('2026-03');
+  const [payroll,      setPayroll]      = useState(()=>{ try{const s=localStorage.getItem('opticom_payroll');return s?JSON.parse(s):PAYROLL_INIT;}catch{return PAYROLL_INIT;} });
+  const [payrollRef,   setPayrollRef]   = useState(()=>new Date().toISOString().slice(0,7));
+  const [payTechs,     setPayTechs]     = useState([]);
+  useEffect(()=>{ localStorage.setItem('opticom_payroll', JSON.stringify(payroll)); }, [payroll]);
   const [payEmpModal,  setPayEmpModal]  = useState(null); // funcionário selecionado para ver detalhes
   const [newPayModal,  setNewPayModal]  = useState(false);
   const [editPayModal, setEditPayModal] = useState(null); // funcionário em edição
   const [editPayForm,  setEditPayForm]  = useState({});
-  const [payForm,      setPayForm]      = useState({ name:'', role:'Técnico de Campo', cpf:'', admDate:'', base:'', horasExtras:'', adicNoturno:'', periculosidade:'', insalubridade:'', bonus:'', vt:'', vr:'', planoSaude:'' });
+  const [payForm,      setPayForm]      = useState({ techId:'', name:'', role:'Técnico de Campo', cpf:'', admDate:'', base:'', horasExtras:'', adicNoturno:'', periculosidade:'', insalubridade:'', bonus:'', vt:'', vr:'', planoSaude:'' });
 
   // abre o modal de edição pré-preenchido com os dados atuais do funcionário
   const openEditPay = emp => {
@@ -2712,13 +2726,23 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
           const provisoes= r => r.prov13 + r.provFerias + r.fgtsProv;
           const custoTotal= r => bruto(r) + benefEmp(r) + encargos(r) + provisoes(r);
 
-          const rows = payroll.filter(p=>p.ref===payrollRef);
+          const payrollRows = payroll.filter(p=>p.ref===payrollRef);
+          const payrollTechIds = new Set(payrollRows.map(p=>p.techId).filter(Boolean));
+          const payrollNames = new Set(payrollRows.map(p=>(p.name||'').toLowerCase()));
+          const techStubs = payTechs
+            .filter(t=>!payrollTechIds.has(t.id)&&!payrollNames.has((t.name||'').toLowerCase()))
+            .map(t=>({id:`stub-${t.id}`,techId:t.id,name:t.name||'—',role:t.specialization||'Técnico de Campo',cpf:'',admDate:'',ref:payrollRef,status:'PENDING',
+              base:0,horasExtras:0,adicNoturno:0,periculosidade:0,insalubridade:0,bonus:0,
+              vt:0,vr:0,planoSaude:0,dINSS:0,dIRRF:0,dVT:0,dPlano:0,
+              inssPatronal:0,fgts:0,rat:0,sistemaS:0,prov13:0,provFerias:0,fgtsProv:0,_stub:true}));
+          const rows = [...payrollRows, ...techStubs];
           const totLiq   = rows.reduce((s,r)=>s+liquido(r),0);
           const totCusto = rows.reduce((s,r)=>s+custoTotal(r),0);
           const totBruto = rows.reduce((s,r)=>s+bruto(r),0);
           const totEnc   = rows.reduce((s,r)=>s+encargos(r)+provisoes(r),0);
 
-          const payAll = () => { setPayroll(prev=>prev.map(p=>p.ref===payrollRef?{...p,status:'PAID'}:p)); setToast('Folha aprovada e paga!'); };
+          const payAll = () => { setPayroll(prev=>prev.map(p=>p.ref===payrollRef&&!p._stub?{...p,status:'PAID'}:p)); setToast('Folha aprovada e paga!'); };
+          const openStubConfig = t => { setPayForm({techId:t.techId,name:t.name,role:t.role,cpf:'',admDate:'',base:'',horasExtras:'',adicNoturno:'',periculosidade:'',insalubridade:'',bonus:'',vt:'',vr:'',planoSaude:''}); setNewPayModal(true); };
 
           const emp = payEmpModal;
           return (
@@ -2776,25 +2800,31 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
                   <tbody className="divide-y divide-gray-100">
                     {rows.length===0&&<tr><td colSpan="10" className="px-4 py-8 text-center text-sm text-gray-400">Nenhum funcionário para o período selecionado</td></tr>}
                     {rows.map(r=>(
-                      <tr key={r.id} className={`hover:bg-gray-50 cursor-pointer ${r.status==='PAID'?'bg-green-50/20':''}`} onClick={()=>setPayEmpModal(r)}>
+                      <tr key={r.id} className={`hover:bg-gray-50 cursor-pointer ${r._stub?'opacity-60 bg-gray-50/50':r.status==='PAID'?'bg-green-50/20':''}`} onClick={()=>r._stub?openStubConfig(r):setPayEmpModal(r)}>
                         <td className="px-3 py-3">
                           <p className="font-semibold text-gray-800">{r.name}</p>
-                          <p className="text-xs text-gray-400">{r.cpf}</p>
+                          <p className="text-xs text-gray-400">{r._stub?'sem salário configurado':r.cpf}</p>
                         </td>
                         <td className="px-3 py-3 text-xs text-gray-500 whitespace-nowrap">{r.role}</td>
-                        <td className="px-3 py-3 font-medium text-gray-800">{fmt(bruto(r))}</td>
-                        <td className="px-3 py-3 text-red-500 font-medium">-{fmt(deducEmp(r))}</td>
-                        <td className="px-3 py-3 font-bold text-blue-700">{fmt(liquido(r))}</td>
-                        <td className="px-3 py-3 text-gray-600">{fmt(benefEmp(r))}</td>
-                        <td className="px-3 py-3 text-red-400">{fmt(encargos(r)+provisoes(r))}</td>
-                        <td className="px-3 py-3 font-bold text-orange-700">{fmt(custoTotal(r))}</td>
+                        <td className="px-3 py-3 font-medium text-gray-800">{r._stub?'—':fmt(bruto(r))}</td>
+                        <td className="px-3 py-3 text-red-500 font-medium">{r._stub?'—':`-${fmt(deducEmp(r))}`}</td>
+                        <td className="px-3 py-3 font-bold text-blue-700">{r._stub?'—':fmt(liquido(r))}</td>
+                        <td className="px-3 py-3 text-gray-600">{r._stub?'—':fmt(benefEmp(r))}</td>
+                        <td className="px-3 py-3 text-red-400">{r._stub?'—':fmt(encargos(r)+provisoes(r))}</td>
+                        <td className="px-3 py-3 font-bold text-orange-700">{r._stub?'—':fmt(custoTotal(r))}</td>
                         <td className="px-3 py-3">
-                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${r.status==='PAID'?'bg-green-100 text-green-700':'bg-amber-100 text-amber-700'}`}>
-                            {r.status==='PAID'?'✓ Pago':'Pendente'}
-                          </span>
+                          {r._stub
+                            ?<span className="text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap bg-gray-100 text-gray-500">Sem salário</span>
+                            :<span className={`text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${r.status==='PAID'?'bg-green-100 text-green-700':'bg-amber-100 text-amber-700'}`}>
+                              {r.status==='PAID'?'✓ Pago':'Pendente'}
+                            </span>
+                          }
                         </td>
                         <td className="px-3 py-3">
-                          <button className="text-xs text-blue-600 hover:underline whitespace-nowrap" onClick={e=>{e.stopPropagation();setPayEmpModal(r);}}>Ver detalhes →</button>
+                          {r._stub
+                            ?<button className="text-xs text-orange-600 hover:underline whitespace-nowrap" onClick={e=>{e.stopPropagation();openStubConfig(r);}}>Configurar →</button>
+                            :<button className="text-xs text-blue-600 hover:underline whitespace-nowrap" onClick={e=>{e.stopPropagation();setPayEmpModal(r);}}>Ver detalhes →</button>
+                          }
                         </td>
                       </tr>
                     ))}
@@ -2923,8 +2953,21 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
               </Modal>
 
               {/* Modal novo funcionário */}
-              <Modal open={newPayModal} onClose={()=>setNewPayModal(false)} title="Cadastrar Funcionário na Folha" size="lg">
+              <Modal open={newPayModal} onClose={()=>{setNewPayModal(false);setPayForm({techId:'',name:'',role:'Técnico de Campo',cpf:'',admDate:'',base:'',horasExtras:'',adicNoturno:'',periculosidade:'',insalubridade:'',bonus:'',vt:'',vr:'',planoSaude:''}); }} title="Cadastrar Funcionário na Folha" size="lg">
                 <div className="grid grid-cols-2 gap-4">
+                  {payTechs.length>0&&(
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Selecionar técnico cadastrado (opcional)</label>
+                      <select value={payForm.techId||''} onChange={e=>{
+                        const t=payTechs.find(x=>x.id===e.target.value);
+                        if(t) setPayForm(p=>({...p,techId:t.id,name:t.name||'',role:t.specialization||'Técnico de Campo'}));
+                        else  setPayForm(p=>({...p,techId:''}));
+                      }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">— Novo funcionário manual —</option>
+                        {payTechs.map(t=><option key={t.id} value={t.id}>{t.name}{t.specialization?` · ${t.specialization}`:''}</option>)}
+                      </select>
+                    </div>
+                  )}
                   {[
                     {l:'Nome *',              k:'name',          ph:'Nome completo'},
                     {l:'CPF',                 k:'cpf',           ph:'000.000.000-00'},
@@ -2948,8 +2991,8 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
                   ))}
                   <p className="col-span-2 text-xs text-gray-400">* INSS, IRRF e encargos patronais serão calculados automaticamente com base no salário informado.</p>
                   <div className="col-span-2 flex gap-2 pt-2 border-t border-gray-100">
-                    <button onClick={()=>setNewPayModal(false)} className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
-                    <button onClick={()=>{
+                    <button onClick={()=>{setNewPayModal(false);setPayForm({techId:'',name:'',role:'Técnico de Campo',cpf:'',admDate:'',base:'',horasExtras:'',adicNoturno:'',periculosidade:'',insalubridade:'',bonus:'',vt:'',vr:'',planoSaude:''}); }} className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
+                    <button onClick={async ()=>{
                       if(!payForm.name.trim()||!payForm.base) return;
                       const n=(k,d=0)=>Math.round(parseFloat(payForm[k]||d)*100);
                       const b=n('base'), ext=n('horasExtras'), an=n('adicNoturno'), peri=n('periculosidade'), insal=n('insalubridade'), bon=n('bonus');
@@ -2957,14 +3000,19 @@ const FinancialPage = ({ taxRegime='REAL' }) => {
                       const vt=n('vt'), vr=n('vr'), ps=n('planoSaude');
                       const dINSS=Math.round(br*0.095), dIRRF=br>400000?Math.round((br-400000)*0.075):0;
                       const dVT=Math.min(vt, Math.round(b*0.06)), dPlano=Math.round(ps*0.25);
-                      const entry={id:Date.now(), name:payForm.name.trim(), role:payForm.role, cpf:payForm.cpf, admDate:payForm.admDate, ref:payrollRef, status:'PENDING',
-                        base:b, horasExtras:ext, adicNoturno:an, periculosidade:peri, insalubridade:insal, bonus:bon,
-                        vt, vr, planoSaude:ps, dINSS, dIRRF, dVT, dPlano,
-                        inssPatronal:Math.round(br*0.20), fgts:Math.round(br*0.08), rat:Math.round(br*0.02), sistemaS:Math.round(br*0.058),
-                        prov13:Math.round(br/12), provFerias:Math.round((br/12)*1.333), fgtsProv:Math.round((br/12)*1.333*0.08+br/12*0.08)};
+                      let techId=payForm.techId||'';
+                      if(!techId&&payForm.name.trim()){
+                        const tr=await api.createTechnician({name:payForm.name.trim(),specialization:payForm.role,phone:'',city:''});
+                        if(tr.success&&tr.data?.id){techId=tr.data.id;setPayTechs(p=>[...p,tr.data]);}
+                      }
+                      const entry={id:Date.now(),techId,name:payForm.name.trim(),role:payForm.role,cpf:payForm.cpf,admDate:payForm.admDate,ref:payrollRef,status:'PENDING',
+                        base:b,horasExtras:ext,adicNoturno:an,periculosidade:peri,insalubridade:insal,bonus:bon,
+                        vt,vr,planoSaude:ps,dINSS,dIRRF,dVT,dPlano,
+                        inssPatronal:Math.round(br*0.20),fgts:Math.round(br*0.08),rat:Math.round(br*0.02),sistemaS:Math.round(br*0.058),
+                        prov13:Math.round(br/12),provFerias:Math.round((br/12)*1.333),fgtsProv:Math.round((br/12)*1.333*0.08+br/12*0.08)};
                       setPayroll(prev=>[...prev,entry]);
                       setNewPayModal(false);
-                      setPayForm({name:'',role:'Técnico de Campo',cpf:'',admDate:'',base:'',horasExtras:'',adicNoturno:'',periculosidade:'',insalubridade:'',bonus:'',vt:'',vr:'',planoSaude:''});
+                      setPayForm({techId:'',name:'',role:'Técnico de Campo',cpf:'',admDate:'',base:'',horasExtras:'',adicNoturno:'',periculosidade:'',insalubridade:'',bonus:'',vt:'',vr:'',planoSaude:''});
                       setToast(`${entry.name} adicionado à folha!`);
                     }} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Cadastrar Funcionário</button>
                   </div>
@@ -4090,7 +4138,9 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
 
   const updateUser = async () => {
     if (!editUserModal) return;
-    const r = await api.updateUser(editUserModal.id, { name: editUserModal.name, role: editUserModal.role });
+    const payload = { name: editUserModal.name, role: editUserModal.role };
+    if (editUserModal.newPassword?.trim()) payload.password = editUserModal.newPassword.trim();
+    const r = await api.updateUser(editUserModal.id, payload);
     if (r.success) {
       setUsers(p=>p.map(u=>u.id===editUserModal.id?{...u,name:editUserModal.name,role:editUserModal.role}:u));
       setEditUserModal(null);
@@ -4549,6 +4599,12 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
                     <option value="TECHNICIAN">Técnico</option>
                   </select>
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nova senha <span className="text-gray-400 font-normal">(opcional)</span></label>
+                  <input type="password" value={editUserModal.newPassword||''} onChange={e=>setEditUserModal(p=>({...p,newPassword:e.target.value}))}
+                    placeholder="Deixe em branco para não alterar"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+                </div>
                 <div className="flex gap-2 pt-2">
                   <button onClick={()=>setEditUserModal(null)} className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50">Cancelar</button>
                   <button onClick={updateUser} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Salvar</button>
@@ -4824,7 +4880,7 @@ function App() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} user={user} permissions={permissions}/>
       <div className="flex-1 flex flex-col overflow-hidden">
-        <Header page={page} onLogout={()=>setLoggedIn(false)} setPage={setPage} regime={regime} user={user}/>
+        <Header page={page} onLogout={()=>{ api.logout(); setLoggedIn(false); }} setPage={setPage} regime={regime} user={user}/>
         <main className="flex-1 overflow-y-auto bg-gray-50">
           {renderPage()}
         </main>
