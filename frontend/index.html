@@ -2067,24 +2067,38 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
   };
 
   // ── Extrato Bancário — parsers e matching ─────────────────────────────────
+  // Converte string monetária para float em reais, independente do formato
+  const parseMoney = s => {
+    const t = (s||'').trim().replace(/[R$\s"']/g,'');
+    if (!t || t==='-' || t==='+') return 0;
+    // Formato BR: termina em ,XX → vírgula é decimal
+    if (/[,]\d{1,2}$/.test(t)) return parseFloat(t.replace(/\./g,'').replace(',','.')) || 0;
+    // Formato US ou inteiro: ponto é decimal (ou sem decimal)
+    return parseFloat(t.replace(/,/g,'')) || 0;
+  };
+
   const parseOFX = text => {
     const lines = [];
-    const re = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi;
+    // Suporta SGML (sem fechamento) e XML (com fechamento de tag)
+    const re = /<STMTTRN[^>]*>([\s\S]*?)<\/STMTTRN>|<STMTTRN>([\s\S]*?)(?=<STMTTRN>|<\/BANKTRANLIST>)/gi;
     let m;
     while ((m = re.exec(text)) !== null) {
-      const b = m[1];
+      const b = m[1] || m[2] || '';
       const g = tag => { const r = new RegExp(`<${tag}>([^<\r\n]+)`,'i'); const x=r.exec(b); return x?x[1].trim():''; };
       const dtRaw = g('DTPOSTED');
       const date  = dtRaw.length>=8 ? `${dtRaw.slice(0,4)}-${dtRaw.slice(4,6)}-${dtRaw.slice(6,8)}` : '';
-      const raw   = parseFloat(g('TRNAMT')||'0');
+      const raw   = parseMoney(g('TRNAMT'));
+      if (raw===0 && !g('FITID')) continue;
       lines.push({ id: g('FITID')||String(lines.length), date, description: g('MEMO')||g('NAME')||'—', amount: Math.abs(raw), type: raw>=0?'CREDIT':'DEBIT' });
     }
     return lines;
   };
   const parseCSV = text => {
-    const rows = text.trim().split(/\r?\n/).map(r=>r.split(/[;,\t]/));
+    // Detecta separador: ; ou tab (evita confundir , de milhar/decimal)
+    const sep = text.includes(';') ? ';' : text.includes('\t') ? '\t' : ',';
+    const rows = text.trim().split(/\r?\n/).map(r=>r.split(sep));
     if (rows.length===0) return [];
-    const hdr = rows[0].map(h=>h.trim().toLowerCase().replace(/"/g,''));
+    const hdr = rows[0].map(h=>h.trim().toLowerCase().replace(/['"]/g,''));
     const dI = hdr.findIndex(h=>h.includes('data')||h.includes('date'));
     const nI = hdr.findIndex(h=>h.includes('descri')||h.includes('histor')||h.includes('memo')||h.includes('name'));
     const aI = hdr.findIndex(h=>h.includes('valor')||h.includes('amount')||h.includes('value'));
@@ -2092,10 +2106,13 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
     const data = (dI>=0||nI>=0) ? rows.slice(1) : rows;
     return data.filter(r=>r.length>1).map((r,i)=>{
       const clean = s => (s||'').trim().replace(/^["']|["']$/g,'');
-      const rawAmt = parseFloat(clean(r[aI>=0?aI:2]).replace(/[R$.\s]/g,'').replace(',','.')) || 0;
+      const rawAmt = parseMoney(clean(r[aI>=0?aI:2]));
       let date = clean(r[dI>=0?dI:0]);
-      const dm = date.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-      if (dm) date = `${dm[3]}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`;
+      const dm = date.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+      if (dm) {
+        const y = dm[3].length===2 ? '20'+dm[3] : dm[3];
+        date = `${y}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`;
+      }
       let type = rawAmt<0 ? 'DEBIT' : 'CREDIT';
       if (tI>=0) { const t=clean(r[tI]).toUpperCase(); if(t.includes('DEB')||t==='D') type='DEBIT'; else if(t.includes('CRE')||t==='C') type='CREDIT'; }
       return { id: String(i), date, description: clean(r[nI>=0?nI:1])||'—', amount: Math.abs(rawAmt), type };
