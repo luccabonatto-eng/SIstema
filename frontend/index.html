@@ -2029,7 +2029,7 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
   // Extrato Bancário
   const [stmtLines,    setStmtLines]    = useState([]);
   const [stmtResults,  setStmtResults]  = useState({});
-  const [stmtRules,    setStmtRules]    = useState(() => { try{return JSON.parse(localStorage.getItem('opticom_stmt_rules'))||{};}catch{return {};} });
+  const [stmtCats,     setStmtCats]     = useState({});
   const [stmtFileName, setStmtFileName] = useState('');
   const [stmtDragging, setStmtDragging] = useState(false);
 
@@ -2105,68 +2105,46 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
     if (filename.toLowerCase().endsWith('.ofx') || text.includes('<STMTTRN>')) return parseOFX(text);
     return parseCSV(text);
   };
-  const matchLine = (line, pending) => {
-    const amt = line.amount;
-    const lineDate = new Date(line.date);
-    const candidates = pending.filter(t => {
-      if (line.type==='CREDIT' && t.type!=='INCOME') return false;
-      if (line.type==='DEBIT'  && t.type!=='EXPENSE') return false;
-      const diff = Math.abs(Math.abs(Number(t.amount))-amt)/Math.max(amt,1);
-      return diff <= 0.02;
-    });
-    if (!candidates.length) return null;
-    const scored = candidates.map(t => {
-      const txDate = new Date(t.due_date||t.created_at);
-      const daysDiff = Math.abs((lineDate-txDate)/86400000);
-      const dateScore = Math.max(0, 1-daysDiff/14);
-      const lw = new Set(line.description.toLowerCase().split(/\s+/).filter(w=>w.length>3));
-      const tw = new Set((t.description||'').toLowerCase().split(/\s+/).filter(w=>w.length>3));
-      const shared = [...lw].filter(w=>tw.has(w)).length;
-      const descScore = lw.size>0 ? shared/lw.size : 0;
-      return { tx:t, score: dateScore*0.6 + descScore*0.4 };
-    });
-    scored.sort((a,b)=>b.score-a.score);
-    const { tx, score } = scored[0];
-    return { match: tx, confidence: score>0.65?'ALTO':score>0.35?'MÉDIO':'BAIXO', score };
-  };
   const loadStmtFile = file => {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = e => {
-      const text = e.target.result;
-      const lines = parseStatement(text, file.name);
-      const pending = transactions.filter(t=>['PENDING','OVERDUE'].includes(t.status));
-      const results = {};
-      lines.forEach(line => {
-        const ruleKey = Object.keys(stmtRules).find(p=>line.description.toLowerCase().includes(p.toLowerCase()));
-        const m = matchLine(line, pending);
-        results[line.id] = { action:null, matchTx: m?.match||null, confidence: m?.confidence||null, ruleHint: ruleKey ? stmtRules[ruleKey] : null };
-      });
+      const lines = parseStatement(e.target.result, file.name);
       setStmtLines(lines);
-      setStmtResults(results);
+      setStmtResults({});
+      setStmtCats({});
       setStmtFileName(file.name);
     };
     reader.readAsText(file,'utf-8');
   };
-  const confirmStmt = line => {
-    const res = stmtResults[line.id];
-    if (!res?.matchTx) return;
-    const tx = res.matchTx;
-    api.updateTransaction(tx.id, { status: tx.type==='INCOME'?'RECEIVED':'PAID', paid_date: line.date })
-      .then(r => {
-        if (!r.success) { setToast('Erro ao conciliar'); return; }
-        const words = line.description.toLowerCase().split(/\s+/).filter(w=>w.length>4).slice(0,2);
-        if (words.length) {
-          const nr = {...stmtRules, [words.join(' ')]: tx.description};
-          setStmtRules(nr);
-          localStorage.setItem('opticom_stmt_rules', JSON.stringify(nr));
-        }
-        setStmtResults(p=>({...p,[line.id]:{...p[line.id],action:'confirm'}}));
-        setTx(p=>p.map(t=>t.id===tx.id?{...t,status:tx.type==='INCOME'?'RECEIVED':'PAID'}:t));
-        setToast(`Conciliado: ${tx.description}`);
-      });
+  const importStmtLine = async line => {
+    const catId = stmtCats[line.id];
+    if (!catId) { setToast('Selecione uma categoria antes de importar'); return; }
+    const txData = {
+      type:        line.type==='CREDIT' ? 'INCOME' : 'EXPENSE',
+      description: line.description,
+      amount:      Math.round(line.amount * 100),
+      due_date:    line.date,
+      paid_date:   line.date,
+      status:      line.type==='CREDIT' ? 'RECEIVED' : 'PAID',
+      category_id: catId,
+    };
+    const r = await api.createTransaction(txData);
+    if (r.success) {
+      const tx = r.data?.data || r.data;
+      setTx(p=>[tx,...p]);
+      setStmtResults(p=>({...p,[line.id]:{action:'imported'}}));
+      setToast(`Lançamento criado: ${line.description.slice(0,40)}`);
+    } else {
+      setToast(r.error||'Erro ao criar lançamento');
+    }
   };
-  const ignoreStmt = id => setStmtResults(p=>({...p,[id]:{...p[id],action:'ignore'}}));
+  const importAllStmt = async () => {
+    const pending = stmtLines.filter(l=>!stmtResults[l.id]?.action && stmtCats[l.id]);
+    if (!pending.length) { setToast('Nenhuma linha com categoria selecionada'); return; }
+    for (const line of pending) await importStmtLine(line);
+  };
+  const ignoreStmt = id => setStmtResults(p=>({...p,[id]:{action:'ignore'}}));
 
   // helper reutilizável de filtro de data
   const FIN_INFO = {
@@ -3563,13 +3541,12 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
         })()}
 
         {tab==='statement'&&(()=>{
-          const pending   = transactions.filter(t=>['PENDING','OVERDUE'].includes(t.status));
-          const done      = stmtLines.filter(l=>stmtResults[l.id]?.action).length;
-          const confirmed = stmtLines.filter(l=>stmtResults[l.id]?.action==='confirm').length;
+          const done      = stmtLines.filter(l=>stmtResults[l.id]?.action==='imported').length;
+          const ignored   = stmtLines.filter(l=>stmtResults[l.id]?.action==='ignore').length;
+          const pending   = stmtLines.filter(l=>!stmtResults[l.id]?.action).length;
           const totalC    = stmtLines.filter(l=>l.type==='CREDIT').reduce((s,l)=>s+l.amount,0);
           const totalD    = stmtLines.filter(l=>l.type==='DEBIT').reduce((s,l)=>s+l.amount,0);
           const pct       = stmtLines.length ? Math.round(done/stmtLines.length*100) : 0;
-          const confColor = c => c==='ALTO'?'bg-green-100 text-green-700':c==='MÉDIO'?'bg-yellow-100 text-yellow-700':'bg-red-100 text-red-700';
           if (stmtLines.length===0) return (
             <div className="flex flex-col items-center justify-center gap-6 py-16"
               onDragOver={e=>{e.preventDefault();setStmtDragging(true);}}
@@ -3579,7 +3556,7 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
                 <div className="w-16 h-16 rounded-full bg-teal-50 flex items-center justify-center text-3xl">⇅</div>
                 <div className="text-center">
                   <p className="font-semibold text-gray-800 text-base">Arraste o extrato aqui</p>
-                  <p className="text-sm text-gray-400 mt-1">ou clique para selecionar o arquivo</p>
+                  <p className="text-sm text-gray-400 mt-1">Cada linha vira um lançamento — você só categoriza</p>
                 </div>
                 <label className="cursor-pointer bg-teal-600 text-white text-sm font-medium px-6 py-2.5 rounded-lg hover:bg-teal-700 transition-colors">
                   Selecionar arquivo
@@ -3588,22 +3565,6 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
                 </label>
                 <p className="text-xs text-gray-400 text-center">Formatos suportados: <strong>OFX</strong> (Bradesco, Itaú, Santander, BB) e <strong>CSV</strong> separado por ; , ou tab</p>
               </div>
-              {Object.keys(stmtRules).length>0&&(
-                <div className="w-full max-w-lg bg-white rounded-xl border border-gray-200 p-4">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Regras aprendidas ({Object.keys(stmtRules).length})</p>
-                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                    {Object.entries(stmtRules).map(([k,v])=>(
-                      <div key={k} className="flex items-center justify-between text-xs">
-                        <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-gray-700">…{k}…</span>
-                        <span className="text-gray-400 mx-2">→</span>
-                        <span className="text-gray-600 flex-1 truncate">{v}</span>
-                        <button onClick={()=>{const r={...stmtRules};delete r[k];setStmtRules(r);localStorage.setItem('opticom_stmt_rules',JSON.stringify(r));}}
-                          className="ml-2 text-red-400 hover:text-red-600 text-sm leading-none">×</button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           );
           return (
@@ -3612,14 +3573,14 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div>
                   <p className="font-semibold text-gray-800">{stmtFileName}</p>
-                  <p className="text-xs text-gray-400">{stmtLines.length} linhas · {stmtLines.filter(l=>stmtResults[l.id]?.matchTx).length} com sugestão automática</p>
+                  <p className="text-xs text-gray-400">{stmtLines.length} linhas · {done} importadas · {pending} pendentes</p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right text-xs">
-                    <p className="text-gray-400">Conciliado</p>
-                    <p className="font-bold text-gray-700">{pct}% ({done}/{stmtLines.length})</p>
-                  </div>
-                  <button onClick={()=>{setStmtLines([]);setStmtResults({});setStmtFileName('');}}
+                <div className="flex items-center gap-2">
+                  <button onClick={importAllStmt}
+                    className="px-4 py-1.5 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700">
+                    Importar todas com categoria
+                  </button>
+                  <button onClick={()=>{setStmtLines([]);setStmtResults({});setStmtCats({});setStmtFileName('');}}
                     className="px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-500 hover:bg-gray-50">Novo arquivo</button>
                 </div>
               </div>
@@ -3627,10 +3588,10 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
               {/* KPI bar */}
               <div className="grid grid-cols-4 gap-3">
                 {[
-                  {l:'Entradas',v:fmt(totalC),c:'text-green-600',bg:'bg-green-50'},
-                  {l:'Saídas',v:fmt(totalD),c:'text-red-600',bg:'bg-red-50'},
-                  {l:'Confirmados',v:confirmed,c:'text-teal-600',bg:'bg-teal-50'},
-                  {l:'Pendentes',v:stmtLines.length-done,c:'text-amber-600',bg:'bg-amber-50'},
+                  {l:'Entradas',v:fmt(totalC*100),c:'text-green-600',bg:'bg-green-50'},
+                  {l:'Saídas',v:fmt(totalD*100),c:'text-red-600',bg:'bg-red-50'},
+                  {l:'Importados',v:done,c:'text-teal-600',bg:'bg-teal-50'},
+                  {l:'Pendentes',v:pending,c:'text-amber-600',bg:'bg-amber-50'},
                 ].map(k=>(
                   <div key={k.l} className={`${k.bg} rounded-xl p-3`}>
                     <p className="text-xs text-gray-500">{k.l}</p>
@@ -3649,59 +3610,72 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 w-28">Data</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Descrição do extrato</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 w-28">Valor</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Sugestão de conciliação</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 w-20">Conf.</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 w-36">Ação</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 w-24">Data</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500">Descrição</th>
+                      <th className="px-3 py-3 text-right text-xs font-semibold text-gray-500 w-28">Valor</th>
+                      <th className="px-3 py-3 text-left text-xs font-semibold text-gray-500 w-52">Categoria</th>
+                      <th className="px-3 py-3 text-center text-xs font-semibold text-gray-500 w-32">Ação</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {stmtLines.map(line => {
-                      const res = stmtResults[line.id]||{};
+                      const res      = stmtResults[line.id]||{};
                       const isCredit = line.type==='CREDIT';
-                      const isDone   = !!res.action;
+                      const cats     = isCredit ? incomeCats : expenseCats;
+                      const catSel   = stmtCats[line.id]||'';
+                      if (res.action==='imported') return (
+                        <tr key={line.id} className="bg-green-50">
+                          <td className="px-3 py-2.5 text-xs text-gray-400 whitespace-nowrap">{fmtDate(line.date)}</td>
+                          <td className="px-3 py-2.5 text-xs text-gray-500 truncate max-w-xs">{line.description}</td>
+                          <td className={`px-3 py-2.5 text-right text-xs font-semibold whitespace-nowrap ${isCredit?'text-green-600':'text-red-600'}`}>
+                            {isCredit?'+':'−'}{fmt(line.amount*100)}
+                          </td>
+                          <td className="px-3 py-2.5 text-xs text-gray-400">{cats.find(c=>c.id===catSel)?.name||'—'}</td>
+                          <td className="px-3 py-2.5 text-center text-xs text-green-600 font-medium">✓ Importado</td>
+                        </tr>
+                      );
+                      if (res.action==='ignore') return (
+                        <tr key={line.id} className="opacity-40 bg-gray-50">
+                          <td className="px-3 py-2.5 text-xs text-gray-400 whitespace-nowrap">{fmtDate(line.date)}</td>
+                          <td className="px-3 py-2.5 text-xs text-gray-500 truncate max-w-xs">{line.description}</td>
+                          <td className={`px-3 py-2.5 text-right text-xs whitespace-nowrap ${isCredit?'text-green-600':'text-red-600'}`}>
+                            {isCredit?'+':'−'}{fmt(line.amount*100)}
+                          </td>
+                          <td colSpan={2} className="px-3 py-2.5 text-center text-xs text-gray-400">
+                            Ignorado
+                            <button onClick={()=>setStmtResults(p=>({...p,[line.id]:{}}))} className="ml-2 text-blue-400 hover:text-blue-600">desfazer</button>
+                          </td>
+                        </tr>
+                      );
                       return (
-                        <tr key={line.id} className={`transition-colors ${res.action==='confirm'?'bg-green-50':res.action==='ignore'?'bg-gray-50 opacity-50':'hover:bg-gray-50'}`}>
-                          <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{line.date}</td>
-                          <td className="px-4 py-3">
-                            <p className="text-gray-800 text-xs font-medium truncate max-w-xs">{line.description}</p>
-                            {res.ruleHint&&!res.matchTx&&<p className="text-xs text-teal-500 mt-0.5">Regra: {res.ruleHint}</p>}
+                        <tr key={line.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{fmtDate(line.date)}</td>
+                          <td className="px-3 py-2.5">
+                            <p className="text-xs text-gray-800 font-medium truncate max-w-xs">{line.description}</p>
                           </td>
-                          <td className={`px-4 py-3 text-right font-semibold text-sm whitespace-nowrap ${isCredit?'text-green-600':'text-red-600'}`}>
-                            {isCredit?'+':'−'}{fmt(line.amount)}
+                          <td className={`px-3 py-2.5 text-right font-semibold text-sm whitespace-nowrap ${isCredit?'text-green-600':'text-red-600'}`}>
+                            {isCredit?'+':'−'}{fmt(line.amount*100)}
                           </td>
-                          <td className="px-4 py-3">
-                            {res.matchTx
-                              ? <div>
-                                  <p className="text-xs font-medium text-gray-800 truncate max-w-xs">{res.matchTx.description}</p>
-                                  <p className="text-xs text-gray-400">{res.matchTx.due_date} · {fmt(res.matchTx.amount)}</p>
-                                </div>
-                              : <p className="text-xs text-gray-400 italic">Sem correspondência</p>}
+                          <td className="px-3 py-2.5">
+                            <select value={catSel}
+                              onChange={e=>setStmtCats(p=>({...p,[line.id]:e.target.value}))}
+                              className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
+                              <option value="">Selecionar...</option>
+                              {cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
                           </td>
-                          <td className="px-4 py-3 text-center">
-                            {res.matchTx&&res.confidence
-                              ? <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${confColor(res.confidence)}`}>{res.confidence}</span>
-                              : <span className="text-gray-300">—</span>}
-                          </td>
-                          <td className="px-4 py-3">
-                            {res.action==='confirm'
-                              ? <span className="flex items-center justify-center gap-1 text-xs text-green-600 font-medium">✓ Conciliado</span>
-                              : res.action==='ignore'
-                              ? <span className="flex items-center justify-center gap-1 text-xs text-gray-400">Ignorado</span>
-                              : <div className="flex items-center justify-center gap-1.5">
-                                  {res.matchTx&&(
-                                    <button onClick={()=>confirmStmt(line)}
-                                      className="px-2.5 py-1 bg-teal-600 text-white text-xs rounded-lg hover:bg-teal-700 font-medium">
-                                      Confirmar
-                                    </button>
-                                  )}
-                                  <button onClick={()=>ignoreStmt(line.id)}
-                                    className="px-2.5 py-1 border border-gray-200 text-gray-500 text-xs rounded-lg hover:bg-gray-50">
-                                    Ignorar
-                                  </button>
-                                </div>}
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center justify-center gap-1">
+                              <button onClick={()=>importStmtLine(line)}
+                                disabled={!catSel}
+                                className="px-2.5 py-1 bg-teal-600 text-white text-xs rounded-lg hover:bg-teal-700 font-medium disabled:opacity-40 disabled:cursor-not-allowed">
+                                Importar
+                              </button>
+                              <button onClick={()=>ignoreStmt(line.id)}
+                                className="px-2 py-1 border border-gray-200 text-gray-400 text-xs rounded-lg hover:bg-gray-50">
+                                —
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -4712,18 +4686,26 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
                     <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Categorias de Receita</p>
                   </div>
                   <div className="space-y-1 mb-3">
-                    {incomeCats.map((c,i)=>(
-                      <div key={i} className="flex items-center justify-between bg-green-50 rounded-lg px-3 py-1.5">
-                        <span className="text-sm text-green-800">{c}</span>
-                        <button onClick={()=>setIncomeCats(p=>p.filter((_,j)=>j!==i))} className="text-xs text-red-400 hover:text-red-600">✕</button>
+                    {incomeCats.map(c=>(
+                      <div key={c.id} className="flex items-center justify-between bg-green-50 rounded-lg px-3 py-1.5">
+                        <span className="text-sm text-green-800">{c.name}</span>
+                        <button onClick={async ()=>{
+                          const r = await api.deleteCategory('income', c.id);
+                          if (r.success) setIncomeCats(p=>p.filter(x=>x.id!==c.id));
+                          else setToast(r.error||'Erro ao remover categoria');
+                        }} className="text-xs text-red-400 hover:text-red-600">✕</button>
                       </div>
                     ))}
                   </div>
                   <div className="flex gap-2">
                     <input value={newCatType==='income'?newCat:''} onChange={e=>{ setNewCat(e.target.value); setNewCatType('income'); }}
                       placeholder="Nova categoria..." className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"/>
-                    <button onClick={()=>{ if(newCat.trim()&&newCatType==='income'){ setIncomeCats(p=>[...p,newCat.trim()]); setNewCat(''); }}}
-                      className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">+ Add</button>
+                    <button onClick={async ()=>{
+                      if(!newCat.trim()||newCatType!=='income') return;
+                      const r = await api.createCategory('income', { name: newCat.trim() });
+                      if (r.success) { setIncomeCats(p=>[...p, r.data]); setNewCat(''); }
+                      else setToast(r.error||'Erro ao criar categoria');
+                    }} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">+ Add</button>
                   </div>
                 </div>
                 {/* Despesa */}
@@ -4733,18 +4715,26 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
                     <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Categorias de Despesa</p>
                   </div>
                   <div className="space-y-1 mb-3">
-                    {expenseCats.map((c,i)=>(
-                      <div key={i} className="flex items-center justify-between bg-red-50 rounded-lg px-3 py-1.5">
-                        <span className="text-sm text-red-800">{c}</span>
-                        <button onClick={()=>setExpenseCats(p=>p.filter((_,j)=>j!==i))} className="text-xs text-red-400 hover:text-red-600">✕</button>
+                    {expenseCats.map(c=>(
+                      <div key={c.id} className="flex items-center justify-between bg-red-50 rounded-lg px-3 py-1.5">
+                        <span className="text-sm text-red-800">{c.name}</span>
+                        <button onClick={async ()=>{
+                          const r = await api.deleteCategory('expense', c.id);
+                          if (r.success) setExpenseCats(p=>p.filter(x=>x.id!==c.id));
+                          else setToast(r.error||'Erro ao remover categoria');
+                        }} className="text-xs text-red-400 hover:text-red-600">✕</button>
                       </div>
                     ))}
                   </div>
                   <div className="flex gap-2">
                     <input value={newCatType==='expense'?newCat:''} onChange={e=>{ setNewCat(e.target.value); setNewCatType('expense'); }}
                       placeholder="Nova categoria..." className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"/>
-                    <button onClick={()=>{ if(newCat.trim()&&newCatType==='expense'){ setExpenseCats(p=>[...p,newCat.trim()]); setNewCat(''); }}}
-                      className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">+ Add</button>
+                    <button onClick={async ()=>{
+                      if(!newCat.trim()||newCatType!=='expense') return;
+                      const r = await api.createCategory('expense', { name: newCat.trim() });
+                      if (r.success) { setExpenseCats(p=>[...p, r.data]); setNewCat(''); }
+                      else setToast(r.error||'Erro ao criar categoria');
+                    }} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">+ Add</button>
                   </div>
                 </div>
               </div>
@@ -4771,7 +4761,11 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
                       className={`text-xs px-2.5 py-1 rounded-full font-medium ${b.active?'bg-green-100 text-green-700 hover:bg-red-50 hover:text-red-600':'bg-gray-100 text-gray-500 hover:bg-green-50 hover:text-green-600'}`}>
                       {b.active?'Ativa':'Inativa'}
                     </button>
-                    <button onClick={()=>setBankAccounts(p=>p.filter(x=>x.id!==b.id))} className="text-xs text-gray-300 hover:text-red-500">✕</button>
+                    <button onClick={async ()=>{
+                      const r = await api.deleteBankAccount(b.id);
+                      if (r.success) setBankAccounts(p=>p.filter(x=>x.id!==b.id));
+                      else setToast(r.error||'Erro ao remover conta');
+                    }} className="text-xs text-gray-300 hover:text-red-500">✕</button>
                   </div>
                 ))}
               </div>
@@ -4788,8 +4782,16 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
                       {['Corrente','Poupança','Pagamento'].map(t=><option key={t}>{t}</option>)}
                     </select></div>
                 </div>
-                <button onClick={()=>{ if(!newBank.bank.trim()||!newBank.account.trim()) return; setBankAccounts(p=>[...p,{id:Date.now(),...newBank,balance:0,active:true}]); setNewBank({bank:'',agency:'',account:'',type:'Corrente'}); }}
-                  className="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Adicionar Conta</button>
+                <button onClick={async ()=>{
+                  if(!newBank.bank.trim()||!newBank.account.trim()) return;
+                  const displayName = newBank.agency ? `${newBank.bank} Ag.${newBank.agency} CC ${newBank.account}` : `${newBank.bank} CC ${newBank.account}`;
+                  const r = await api.createBankAccount({ name: displayName, bank_name: newBank.bank, account_number: newBank.account });
+                  if (r.success) {
+                    setBankAccounts(p=>[...p,{...r.data, bank: r.data.bank_name||newBank.bank, account: r.data.account_number||newBank.account, agency: newBank.agency, type: newBank.type, balance: 0, active: true}]);
+                    setNewBank({bank:'',agency:'',account:'',type:'Corrente'});
+                    setToast('Conta bancária adicionada!');
+                  } else { setToast(r.error||'Erro ao adicionar conta'); }
+                }} className="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Adicionar Conta</button>
               </div>
             </div>
 
@@ -4805,17 +4807,28 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
                 {payMethods.map(m=>(
                   <div key={m.id} className={`flex items-center justify-between p-3 rounded-xl border ${m.active?'border-blue-200 bg-blue-50':'border-gray-100 bg-gray-50'}`}>
                     <span className={`text-sm font-medium ${m.active?'text-blue-800':'text-gray-400'}`}>{m.name}</span>
-                    <button onClick={()=>setPayMethods(p=>p.map(x=>x.id===m.id?{...x,active:!x.active}:x))}
-                      className={`w-9 h-5 rounded-full transition-colors relative ${m.active?'bg-blue-500':'bg-gray-300'}`}>
-                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${m.active?'left-4':'left-0.5'}`}/>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button onClick={()=>setPayMethods(p=>p.map(x=>x.id===m.id?{...x,active:!x.active}:x))}
+                        className={`w-9 h-5 rounded-full transition-colors relative ${m.active?'bg-blue-500':'bg-gray-300'}`}>
+                        <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${m.active?'left-4':'left-0.5'}`}/>
+                      </button>
+                      <button onClick={async ()=>{
+                        const r = await api.deletePaymentMethod(m.id);
+                        if (r.success) setPayMethods(p=>p.filter(x=>x.id!==m.id));
+                        else setToast(r.error||'Erro ao remover método');
+                      }} className="text-xs text-gray-300 hover:text-red-500">✕</button>
+                    </div>
                   </div>
                 ))}
               </div>
               <div className="border-t border-gray-100 pt-4 flex gap-2">
                 <input value={newPay} onChange={e=>setNewPay(e.target.value)} placeholder="Nova forma de pagamento..." className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-                <button onClick={()=>{ if(!newPay.trim()) return; setPayMethods(p=>[...p,{id:Date.now(),name:newPay.trim(),active:true}]); setNewPay(''); }}
-                  className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Adicionar</button>
+                <button onClick={async ()=>{
+                  if(!newPay.trim()) return;
+                  const r = await api.createPaymentMethod({ name: newPay.trim() });
+                  if (r.success) { setPayMethods(p=>[...p,{...r.data,active:true}]); setNewPay(''); }
+                  else setToast(r.error||'Erro ao criar método');
+                }} className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Adicionar</button>
               </div>
             </div>
           </div>
@@ -5299,6 +5312,12 @@ function App() {
         ...m,
         active: m.active !== undefined ? m.active : true
       })));
+    });
+    api.getCategories().then(r => {
+      if (r.success) {
+        if (r.data?.income)  setIncomeCats(r.data.income);
+        if (r.data?.expense) setExpenseCats(r.data.expense);
+      }
     });
   }, []);
 

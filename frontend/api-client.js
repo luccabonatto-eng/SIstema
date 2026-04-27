@@ -294,6 +294,14 @@ class OpticomAPI {
     return this._fetch('/categories');
   }
 
+  async createCategory(type, data) {
+    return this._fetch(`/categories/${type}`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async deleteCategory(type, id) {
+    return this._fetch(`/categories/${type}/${id}`, { method: 'DELETE' });
+  }
+
   // === Contas Bancárias ===
   async getBankAccounts() {
     return this._fetch('/bank-accounts');
@@ -314,6 +322,14 @@ class OpticomAPI {
   // === Métodos de Pagamento ===
   async getPaymentMethods() {
     return this._fetch('/payment-methods');
+  }
+
+  async createPaymentMethod(data) {
+    return this._fetch('/payment-methods', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async deletePaymentMethod(id) {
+    return this._fetch(`/payment-methods/${id}`, { method: 'DELETE' });
   }
 }
 
