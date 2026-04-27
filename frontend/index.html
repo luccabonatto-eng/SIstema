@@ -471,7 +471,7 @@ const MENU = [
 ];
 
 const ALL_PAGE_IDS = MENU.map(m=>m.id);
-const FINANCIAL_SUBMENU_IDS = ['receivable','payable','cashflow','dre','payroll','approval'];
+const FINANCIAL_SUBMENU_IDS = ['receivable','payable','cashflow','dre','payroll','approval','statement'];
 const DEFAULT_PERMISSIONS = {
   ADMIN:          [...ALL_PAGE_IDS],
   MANAGER:        ['dashboard','orders','financial','inventory','fleet','customers','contracts','technicians'],
@@ -2022,6 +2022,12 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
   const [editPayModal, setEditPayModal] = useState(null); // funcionário em edição
   const [editPayForm,  setEditPayForm]  = useState({});
   const [payForm,      setPayForm]      = useState({ techId:'', name:'', role:'Técnico de Campo', cpf:'', admDate:'', base:'', horasExtras:'', adicNoturno:'', periculosidade:'', insalubridade:'', bonus:'', vt:'', vr:'', planoSaude:'' });
+  // Extrato Bancário
+  const [stmtLines,    setStmtLines]    = useState([]);
+  const [stmtResults,  setStmtResults]  = useState({});
+  const [stmtRules,    setStmtRules]    = useState(() => { try{return JSON.parse(localStorage.getItem('opticom_stmt_rules'))||{};}catch{return {};} });
+  const [stmtFileName, setStmtFileName] = useState('');
+  const [stmtDragging, setStmtDragging] = useState(false);
 
   // abre o modal de edição pré-preenchido com os dados atuais do funcionário
   const openEditPay = emp => {
@@ -2055,6 +2061,108 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
     setEditPayModal(null);
     setToast(`Dados de ${updated.name} atualizados!`);
   };
+
+  // ── Extrato Bancário — parsers e matching ─────────────────────────────────
+  const parseOFX = text => {
+    const lines = [];
+    const re = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const b = m[1];
+      const g = tag => { const r = new RegExp(`<${tag}>([^<\r\n]+)`,'i'); const x=r.exec(b); return x?x[1].trim():''; };
+      const dtRaw = g('DTPOSTED');
+      const date  = dtRaw.length>=8 ? `${dtRaw.slice(0,4)}-${dtRaw.slice(4,6)}-${dtRaw.slice(6,8)}` : '';
+      const raw   = parseFloat(g('TRNAMT')||'0');
+      lines.push({ id: g('FITID')||String(lines.length), date, description: g('MEMO')||g('NAME')||'—', amount: Math.abs(raw), type: raw>=0?'CREDIT':'DEBIT' });
+    }
+    return lines;
+  };
+  const parseCSV = text => {
+    const rows = text.trim().split(/\r?\n/).map(r=>r.split(/[;,\t]/));
+    if (rows.length===0) return [];
+    const hdr = rows[0].map(h=>h.trim().toLowerCase().replace(/"/g,''));
+    const dI = hdr.findIndex(h=>h.includes('data')||h.includes('date'));
+    const nI = hdr.findIndex(h=>h.includes('descri')||h.includes('histor')||h.includes('memo')||h.includes('name'));
+    const aI = hdr.findIndex(h=>h.includes('valor')||h.includes('amount')||h.includes('value'));
+    const tI = hdr.findIndex(h=>h.includes('tipo')||h.includes('type')||h.includes('cr/db')||h.includes('deb')||h.includes('lancamento'));
+    const data = (dI>=0||nI>=0) ? rows.slice(1) : rows;
+    return data.filter(r=>r.length>1).map((r,i)=>{
+      const clean = s => (s||'').trim().replace(/^["']|["']$/g,'');
+      const rawAmt = parseFloat(clean(r[aI>=0?aI:2]).replace(/[R$.\s]/g,'').replace(',','.')) || 0;
+      let date = clean(r[dI>=0?dI:0]);
+      const dm = date.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (dm) date = `${dm[3]}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`;
+      let type = rawAmt<0 ? 'DEBIT' : 'CREDIT';
+      if (tI>=0) { const t=clean(r[tI]).toUpperCase(); if(t.includes('DEB')||t==='D') type='DEBIT'; else if(t.includes('CRE')||t==='C') type='CREDIT'; }
+      return { id: String(i), date, description: clean(r[nI>=0?nI:1])||'—', amount: Math.abs(rawAmt), type };
+    }).filter(l=>l.amount>0);
+  };
+  const parseStatement = (text, filename) => {
+    if (filename.toLowerCase().endsWith('.ofx') || text.includes('<STMTTRN>')) return parseOFX(text);
+    return parseCSV(text);
+  };
+  const matchLine = (line, pending) => {
+    const amt = line.amount;
+    const lineDate = new Date(line.date);
+    const candidates = pending.filter(t => {
+      if (line.type==='CREDIT' && t.type!=='INCOME') return false;
+      if (line.type==='DEBIT'  && t.type!=='EXPENSE') return false;
+      const diff = Math.abs(Math.abs(Number(t.amount))-amt)/Math.max(amt,1);
+      return diff <= 0.02;
+    });
+    if (!candidates.length) return null;
+    const scored = candidates.map(t => {
+      const txDate = new Date(t.due_date||t.created_at);
+      const daysDiff = Math.abs((lineDate-txDate)/86400000);
+      const dateScore = Math.max(0, 1-daysDiff/14);
+      const lw = new Set(line.description.toLowerCase().split(/\s+/).filter(w=>w.length>3));
+      const tw = new Set((t.description||'').toLowerCase().split(/\s+/).filter(w=>w.length>3));
+      const shared = [...lw].filter(w=>tw.has(w)).length;
+      const descScore = lw.size>0 ? shared/lw.size : 0;
+      return { tx:t, score: dateScore*0.6 + descScore*0.4 };
+    });
+    scored.sort((a,b)=>b.score-a.score);
+    const { tx, score } = scored[0];
+    return { match: tx, confidence: score>0.65?'ALTO':score>0.35?'MÉDIO':'BAIXO', score };
+  };
+  const loadStmtFile = file => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const text = e.target.result;
+      const lines = parseStatement(text, file.name);
+      const pending = transactions.filter(t=>['PENDING','OVERDUE'].includes(t.status));
+      const results = {};
+      lines.forEach(line => {
+        const ruleKey = Object.keys(stmtRules).find(p=>line.description.toLowerCase().includes(p.toLowerCase()));
+        const m = matchLine(line, pending);
+        results[line.id] = { action:null, matchTx: m?.match||null, confidence: m?.confidence||null, ruleHint: ruleKey ? stmtRules[ruleKey] : null };
+      });
+      setStmtLines(lines);
+      setStmtResults(results);
+      setStmtFileName(file.name);
+    };
+    reader.readAsText(file,'utf-8');
+  };
+  const confirmStmt = line => {
+    const res = stmtResults[line.id];
+    if (!res?.matchTx) return;
+    const tx = res.matchTx;
+    api.updateTransaction(tx.id, { status: tx.type==='INCOME'?'RECEIVED':'PAID', paid_date: line.date })
+      .then(r => {
+        if (!r.success) { setToast('Erro ao conciliar'); return; }
+        const words = line.description.toLowerCase().split(/\s+/).filter(w=>w.length>4).slice(0,2);
+        if (words.length) {
+          const nr = {...stmtRules, [words.join(' ')]: tx.description};
+          setStmtRules(nr);
+          localStorage.setItem('opticom_stmt_rules', JSON.stringify(nr));
+        }
+        setStmtResults(p=>({...p,[line.id]:{...p[line.id],action:'confirm'}}));
+        setTx(p=>p.map(t=>t.id===tx.id?{...t,status:tx.type==='INCOME'?'RECEIVED':'PAID'}:t));
+        setToast(`Conciliado: ${tx.description}`);
+      });
+  };
+  const ignoreStmt = id => setStmtResults(p=>({...p,[id]:{...p[id],action:'ignore'}}));
 
   // helper reutilizável de filtro de data
   const FIN_INFO = {
@@ -2272,6 +2380,7 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
     { id:'dre',        label:'DRE Gerencial',       icon:'≡', color:'text-purple-600', bg:'bg-purple-50' },
     { id:'payroll',    label:'Folha Salarial',      icon:'$', color:'text-cyan-600',   bg:'bg-cyan-50'   },
     { id:'approval',   label:'Aprovações do Dia',  icon:'✓', color:'text-violet-600', bg:'bg-violet-50', badge: approvalQueue.length },
+    { id:'statement',  label:'Extrato Bancário',   icon:'⇅', color:'text-teal-600',   bg:'bg-teal-50'   },
   ];
   const allowedFinSet = finPerms ? new Set(finPerms) : null;
   const MENU_ITEMS = allowedFinSet ? ALL_MENU_ITEMS.filter(m=>allowedFinSet.has(m.id)) : ALL_MENU_ITEMS;
@@ -3444,6 +3553,157 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
                     </table>
                   </div>
                 </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {tab==='statement'&&(()=>{
+          const pending   = transactions.filter(t=>['PENDING','OVERDUE'].includes(t.status));
+          const done      = stmtLines.filter(l=>stmtResults[l.id]?.action).length;
+          const confirmed = stmtLines.filter(l=>stmtResults[l.id]?.action==='confirm').length;
+          const totalC    = stmtLines.filter(l=>l.type==='CREDIT').reduce((s,l)=>s+l.amount,0);
+          const totalD    = stmtLines.filter(l=>l.type==='DEBIT').reduce((s,l)=>s+l.amount,0);
+          const pct       = stmtLines.length ? Math.round(done/stmtLines.length*100) : 0;
+          const confColor = c => c==='ALTO'?'bg-green-100 text-green-700':c==='MÉDIO'?'bg-yellow-100 text-yellow-700':'bg-red-100 text-red-700';
+          if (stmtLines.length===0) return (
+            <div className="flex flex-col items-center justify-center gap-6 py-16"
+              onDragOver={e=>{e.preventDefault();setStmtDragging(true);}}
+              onDragLeave={()=>setStmtDragging(false)}
+              onDrop={e=>{e.preventDefault();setStmtDragging(false);loadStmtFile(e.dataTransfer.files[0]);}}>
+              <div className={`w-full max-w-lg rounded-2xl border-2 border-dashed transition-colors flex flex-col items-center gap-4 py-14 px-8 ${stmtDragging?'border-teal-400 bg-teal-50':'border-gray-300 bg-white'}`}>
+                <div className="w-16 h-16 rounded-full bg-teal-50 flex items-center justify-center text-3xl">⇅</div>
+                <div className="text-center">
+                  <p className="font-semibold text-gray-800 text-base">Arraste o extrato aqui</p>
+                  <p className="text-sm text-gray-400 mt-1">ou clique para selecionar o arquivo</p>
+                </div>
+                <label className="cursor-pointer bg-teal-600 text-white text-sm font-medium px-6 py-2.5 rounded-lg hover:bg-teal-700 transition-colors">
+                  Selecionar arquivo
+                  <input type="file" className="hidden" accept=".csv,.ofx,.txt,.ret"
+                    onChange={e=>loadStmtFile(e.target.files[0])}/>
+                </label>
+                <p className="text-xs text-gray-400 text-center">Formatos suportados: <strong>OFX</strong> (Bradesco, Itaú, Santander, BB) e <strong>CSV</strong> separado por ; , ou tab</p>
+              </div>
+              {Object.keys(stmtRules).length>0&&(
+                <div className="w-full max-w-lg bg-white rounded-xl border border-gray-200 p-4">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Regras aprendidas ({Object.keys(stmtRules).length})</p>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                    {Object.entries(stmtRules).map(([k,v])=>(
+                      <div key={k} className="flex items-center justify-between text-xs">
+                        <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-gray-700">…{k}…</span>
+                        <span className="text-gray-400 mx-2">→</span>
+                        <span className="text-gray-600 flex-1 truncate">{v}</span>
+                        <button onClick={()=>{const r={...stmtRules};delete r[k];setStmtRules(r);localStorage.setItem('opticom_stmt_rules',JSON.stringify(r));}}
+                          className="ml-2 text-red-400 hover:text-red-600 text-sm leading-none">×</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+          return (
+            <div className="space-y-4">
+              {/* Header */}
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <p className="font-semibold text-gray-800">{stmtFileName}</p>
+                  <p className="text-xs text-gray-400">{stmtLines.length} linhas · {stmtLines.filter(l=>stmtResults[l.id]?.matchTx).length} com sugestão automática</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right text-xs">
+                    <p className="text-gray-400">Conciliado</p>
+                    <p className="font-bold text-gray-700">{pct}% ({done}/{stmtLines.length})</p>
+                  </div>
+                  <button onClick={()=>{setStmtLines([]);setStmtResults({});setStmtFileName('');}}
+                    className="px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-500 hover:bg-gray-50">Novo arquivo</button>
+                </div>
+              </div>
+
+              {/* KPI bar */}
+              <div className="grid grid-cols-4 gap-3">
+                {[
+                  {l:'Entradas',v:fmt(totalC),c:'text-green-600',bg:'bg-green-50'},
+                  {l:'Saídas',v:fmt(totalD),c:'text-red-600',bg:'bg-red-50'},
+                  {l:'Confirmados',v:confirmed,c:'text-teal-600',bg:'bg-teal-50'},
+                  {l:'Pendentes',v:stmtLines.length-done,c:'text-amber-600',bg:'bg-amber-50'},
+                ].map(k=>(
+                  <div key={k.l} className={`${k.bg} rounded-xl p-3`}>
+                    <p className="text-xs text-gray-500">{k.l}</p>
+                    <p className={`text-lg font-bold ${k.c}`}>{k.v}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Progress bar */}
+              <div className="w-full bg-gray-100 rounded-full h-1.5">
+                <div className="bg-teal-500 h-1.5 rounded-full transition-all" style={{width:`${pct}%`}}/>
+              </div>
+
+              {/* Table */}
+              <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 w-28">Data</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Descrição do extrato</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 w-28">Valor</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Sugestão de conciliação</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 w-20">Conf.</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 w-36">Ação</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {stmtLines.map(line => {
+                      const res = stmtResults[line.id]||{};
+                      const isCredit = line.type==='CREDIT';
+                      const isDone   = !!res.action;
+                      return (
+                        <tr key={line.id} className={`transition-colors ${res.action==='confirm'?'bg-green-50':res.action==='ignore'?'bg-gray-50 opacity-50':'hover:bg-gray-50'}`}>
+                          <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{line.date}</td>
+                          <td className="px-4 py-3">
+                            <p className="text-gray-800 text-xs font-medium truncate max-w-xs">{line.description}</p>
+                            {res.ruleHint&&!res.matchTx&&<p className="text-xs text-teal-500 mt-0.5">Regra: {res.ruleHint}</p>}
+                          </td>
+                          <td className={`px-4 py-3 text-right font-semibold text-sm whitespace-nowrap ${isCredit?'text-green-600':'text-red-600'}`}>
+                            {isCredit?'+':'−'}{fmt(line.amount)}
+                          </td>
+                          <td className="px-4 py-3">
+                            {res.matchTx
+                              ? <div>
+                                  <p className="text-xs font-medium text-gray-800 truncate max-w-xs">{res.matchTx.description}</p>
+                                  <p className="text-xs text-gray-400">{res.matchTx.due_date} · {fmt(res.matchTx.amount)}</p>
+                                </div>
+                              : <p className="text-xs text-gray-400 italic">Sem correspondência</p>}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {res.matchTx&&res.confidence
+                              ? <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${confColor(res.confidence)}`}>{res.confidence}</span>
+                              : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {res.action==='confirm'
+                              ? <span className="flex items-center justify-center gap-1 text-xs text-green-600 font-medium">✓ Conciliado</span>
+                              : res.action==='ignore'
+                              ? <span className="flex items-center justify-center gap-1 text-xs text-gray-400">Ignorado</span>
+                              : <div className="flex items-center justify-center gap-1.5">
+                                  {res.matchTx&&(
+                                    <button onClick={()=>confirmStmt(line)}
+                                      className="px-2.5 py-1 bg-teal-600 text-white text-xs rounded-lg hover:bg-teal-700 font-medium">
+                                      Confirmar
+                                    </button>
+                                  )}
+                                  <button onClick={()=>ignoreStmt(line.id)}
+                                    className="px-2.5 py-1 border border-gray-200 text-gray-500 text-xs rounded-lg hover:bg-gray-50">
+                                    Ignorar
+                                  </button>
+                                </div>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           );
@@ -4804,6 +5064,7 @@ const SettingsPage = ({ taxRegime, setTaxRegime, incomeCats=[], setIncomeCats, e
                     {id:'dre',        label:'DRE Gerencial'},
                     {id:'payroll',    label:'Folha Salarial'},
                     {id:'approval',   label:'Aprovações do Dia'},
+                    {id:'statement',  label:'Extrato Bancário'},
                   ].map(s=>{
                     const managerHas = (permissions.MANAGER_fin||[]).includes(s.id);
                     const techHas    = (permissions.TECHNICIAN_fin||[]).includes(s.id);
