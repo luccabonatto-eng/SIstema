@@ -112,4 +112,56 @@ router.delete('/:id', checkRole('ADMIN', 'MANAGER'), async (req, res) => {
   }
 });
 
+// GET maintenance history for a vehicle
+router.get('/:id/maintenance', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('vehicle_maintenance')
+      .select('*')
+      .eq('vehicle_id', req.params.id)
+      .order('date', { ascending: false });
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST register maintenance for a vehicle
+router.post('/:id/maintenance', async (req, res) => {
+  try {
+    const { date, type, description, km, cost, technician_name } = req.body;
+
+    if (!date || !type) {
+      return res.status(400).json({ error: 'Data e tipo são obrigatórios' });
+    }
+
+    const { data, error } = await supabase
+      .from('vehicle_maintenance')
+      .insert([{
+        vehicle_id: req.params.id,
+        date,
+        type,
+        description: description || null,
+        km: km || null,
+        cost: cost || 0,
+        technician_name: technician_name || null
+      }])
+      .select();
+
+    if (error) throw error;
+
+    // Atualizar last_service_date do veículo
+    await supabase
+      .from('vehicles')
+      .update({ last_service_date: date, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id);
+
+    res.status(201).json(data[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;
