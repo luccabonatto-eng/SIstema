@@ -2067,16 +2067,18 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
   };
 
   // ── Extrato Bancário — parsers e matching ─────────────────────────────────
-  // Converte string monetária para float em reais, independente do formato
+  // Converte string monetária → centavos (inteiro), igual à convenção do DB.
   const parseMoney = s => {
     const t = (s||'').trim().replace(/[R$\s"']/g,'');
     if (!t || t==='-' || t==='+') return 0;
+    let reais;
     // Formato BR com centavos: termina em ,XX → vírgula é decimal (ex: 1.000,00)
-    if (/[,]\d{1,2}$/.test(t)) return parseFloat(t.replace(/\./g,'').replace(',','.')) || 0;
+    if (/[,]\d{1,2}$/.test(t)) reais = parseFloat(t.replace(/\./g,'').replace(',','.')) || 0;
     // Formato BR sem centavos: ponto como separador de milhar (ex: 1.000 ou 10.000)
-    if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) return parseFloat(t.replace(/\./g,'')) || 0;
+    else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) reais = parseFloat(t.replace(/\./g,'')) || 0;
     // Formato US ou inteiro: ponto é decimal (ou sem decimal)
-    return parseFloat(t.replace(/,/g,'')) || 0;
+    else reais = parseFloat(t.replace(/,/g,'')) || 0;
+    return Math.round(reais * 100); // retorna centavos
   };
 
   const parseOFX = text => {
@@ -2142,7 +2144,7 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
     const txData = {
       type:        line.type==='CREDIT' ? 'INCOME' : 'EXPENSE',
       description: line.description,
-      amount:      Math.round(line.amount * 100),
+      amount:      line.amount,
       due_date:    line.date,
       paid_date:   line.date,
       status:      line.type==='CREDIT' ? 'RECEIVED' : 'PAID',
@@ -3607,8 +3609,8 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
               {/* KPI bar */}
               <div className="grid grid-cols-4 gap-3">
                 {[
-                  {l:'Entradas',v:fmt(totalC*100),c:'text-green-600',bg:'bg-green-50'},
-                  {l:'Saídas',v:fmt(totalD*100),c:'text-red-600',bg:'bg-red-50'},
+                  {l:'Entradas',v:fmt(totalC),c:'text-green-600',bg:'bg-green-50'},
+                  {l:'Saídas',v:fmt(totalD),c:'text-red-600',bg:'bg-red-50'},
                   {l:'Importados',v:done,c:'text-teal-600',bg:'bg-teal-50'},
                   {l:'Pendentes',v:pending,c:'text-amber-600',bg:'bg-amber-50'},
                 ].map(k=>(
@@ -3647,7 +3649,7 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
                           <td className="px-3 py-2.5 text-xs text-gray-400 whitespace-nowrap">{fmtDate(line.date)}</td>
                           <td className="px-3 py-2.5 text-xs text-gray-500 truncate max-w-xs">{line.description}</td>
                           <td className={`px-3 py-2.5 text-right text-xs font-semibold whitespace-nowrap ${isCredit?'text-green-600':'text-red-600'}`}>
-                            {isCredit?'+':'−'}{fmt(line.amount*100)}
+                            {isCredit?'+':'−'}{fmt(line.amount)}
                           </td>
                           <td className="px-3 py-2.5 text-xs text-gray-400">{cats.find(c=>c.id===catSel)?.name||'—'}</td>
                           <td className="px-3 py-2.5 text-center text-xs text-green-600 font-medium">✓ Importado</td>
@@ -3658,7 +3660,7 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
                           <td className="px-3 py-2.5 text-xs text-gray-400 whitespace-nowrap">{fmtDate(line.date)}</td>
                           <td className="px-3 py-2.5 text-xs text-gray-500 truncate max-w-xs">{line.description}</td>
                           <td className={`px-3 py-2.5 text-right text-xs whitespace-nowrap ${isCredit?'text-green-600':'text-red-600'}`}>
-                            {isCredit?'+':'−'}{fmt(line.amount*100)}
+                            {isCredit?'+':'−'}{fmt(line.amount)}
                           </td>
                           <td colSpan={2} className="px-3 py-2.5 text-center text-xs text-gray-400">
                             Ignorado
@@ -3673,7 +3675,7 @@ const FinancialPage = ({ taxRegime='REAL', finPerms }) => {
                             <p className="text-xs text-gray-800 font-medium truncate max-w-xs">{line.description}</p>
                           </td>
                           <td className={`px-3 py-2.5 text-right font-semibold text-sm whitespace-nowrap ${isCredit?'text-green-600':'text-red-600'}`}>
-                            {isCredit?'+':'−'}{fmt(line.amount*100)}
+                            {isCredit?'+':'−'}{fmt(line.amount)}
                           </td>
                           <td className="px-3 py-2.5">
                             <select value={catSel}
