@@ -46,26 +46,23 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { name, sku, category, quantity, unit_cost, unit_price, description } = req.body;
+    const { name, sku, category, quantity, min_quantity, unit_cost, unit_price, description } = req.body;
 
     if (!name || !sku) return res.status(400).json({ error: 'Nome e SKU obrigatórios' });
 
-    // Validação robusta
     if (quantity !== undefined && quantity !== null && quantity < 0) {
       return res.status(400).json({ error: 'Quantidade não pode ser negativa' });
     }
-
     if (unit_cost !== undefined && unit_cost !== null && unit_cost < 0) {
       return res.status(400).json({ error: 'Custo unitário não pode ser negativo' });
     }
-
     if (unit_price !== undefined && unit_price !== null && unit_price < 0) {
       return res.status(400).json({ error: 'Preço unitário não pode ser negativo' });
     }
 
     const { data, error } = await supabase
       .from('products')
-      .insert([{ name, sku, category, quantity: quantity || 0, unit_cost, unit_price, description }])
+      .insert([{ name, sku, category, quantity: quantity || 0, min_quantity: min_quantity || 0, unit_cost, unit_price, description }])
       .select();
 
     if (error) throw error;
@@ -79,7 +76,7 @@ router.put('/:id', async (req, res) => {
   try {
     // Whitelist explícito - apenas estes campos podem ser atualizados
     const allowedFields = {};
-    const fieldMap = ['name', 'sku', 'category', 'quantity', 'unit_cost', 'unit_price', 'description'];
+    const fieldMap = ['name', 'sku', 'category', 'quantity', 'min_quantity', 'unit_cost', 'unit_price', 'description'];
 
     fieldMap.forEach(field => {
       if (req.body.hasOwnProperty(field)) {

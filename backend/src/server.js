@@ -22,6 +22,7 @@ const usersRoutes = require('./routes/users');
 const settingsRoutes = require('./routes/settings');
 
 const authMiddleware = require('./middleware/auth');
+const audit = require('./middleware/audit');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -87,19 +88,19 @@ app.get('/api/health', (req, res) => {
 });
 
 // Rotas protegidas (requerem autenticação)
-app.use('/api/customers', authMiddleware, customersRoutes);
-app.use('/api/contracts', authMiddleware, contractsRoutes);
-app.use('/api/orders', authMiddleware, ordersRoutes);
-app.use('/api/technicians', authMiddleware, techniciansRoutes);
-app.use('/api/vehicles', authMiddleware, vehiclesRoutes);
-app.use('/api/products', authMiddleware, productsRoutes);
-app.use('/api/transactions', authMiddleware, transactionsRoutes);
-app.use('/api/audit', authMiddleware, auditRoutes);
-app.use('/api/categories', authMiddleware, categoriesRoutes);
-app.use('/api/bank-accounts', authMiddleware, bankAccountsRoutes);
+app.use('/api/customers',       authMiddleware, audit('Clientes'),   customersRoutes);
+app.use('/api/contracts',       authMiddleware, audit('Contratos'),  contractsRoutes);
+app.use('/api/orders',          authMiddleware, audit('OS'),         ordersRoutes);
+app.use('/api/technicians',     authMiddleware, audit('Técnicos'),   techniciansRoutes);
+app.use('/api/vehicles',        authMiddleware, audit('Frota'),      vehiclesRoutes);
+app.use('/api/products',        authMiddleware, audit('Estoque'),    productsRoutes);
+app.use('/api/transactions',    authMiddleware, audit('Financeiro'), transactionsRoutes);
+app.use('/api/audit',           authMiddleware, auditRoutes);
+app.use('/api/categories',      authMiddleware, categoriesRoutes);
+app.use('/api/bank-accounts',   authMiddleware, bankAccountsRoutes);
 app.use('/api/payment-methods', authMiddleware, paymentMethodsRoutes);
-app.use('/api/users', authMiddleware, usersRoutes);
-app.use('/api/settings', authMiddleware, settingsRoutes);
+app.use('/api/users',           authMiddleware, audit('Usuários'),   usersRoutes);
+app.use('/api/settings',        authMiddleware, audit('Sistema'),    settingsRoutes);
 
 // Error handling
 app.use((err, req, res, next) => {
