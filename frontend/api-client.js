@@ -7,6 +7,12 @@ const API_BASE_URL = window.location.origin.includes('localhost')
 
 class OpticomAPI {
   constructor() {
+    // Modo demo: usa token fixo para visualização sem login
+    const DEMO_TOKEN = 'demo-preview-opticom-2026';
+    const DEMO_USER = { id: 'demo', name: 'Demo', role: 'ADMIN' };
+    sessionStorage.setItem('opticom_token', DEMO_TOKEN);
+    sessionStorage.setItem('opticom_user', JSON.stringify(DEMO_USER));
+
     this.token = sessionStorage.getItem('opticom_token') || null;
     try {
       this.user = JSON.parse(sessionStorage.getItem('opticom_user') || 'null');
@@ -246,6 +252,12 @@ class OpticomAPI {
 
   async deleteTransaction(id) {
     return this._fetch(`/transactions/${id}`, { method: 'DELETE' });
+  }
+
+  // === DRE Gerencial ===
+  async getDreGerencial(filters = {}) {
+    const params = new URLSearchParams(filters);
+    return this._fetch(`/transactions/dre-gerencial?${params}`);
   }
 
   // === Manutenção de Veículos ===

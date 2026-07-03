@@ -43,3 +43,5 @@ Thumbs.db
 # Temporary
 tmp/
 temp/
+frontend/babel.min.js
+frontend/package-lock.json
